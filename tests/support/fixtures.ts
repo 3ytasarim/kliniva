@@ -158,6 +158,8 @@ export async function cleanupTenants() {
     await tx.execute(sql`select set_config('kliniva.retention_purge', 'on', true)`);
     for (const id of ids) {
       await tx.execute(sql`select set_config('app.tenant_id', ${id}, true)`);
+      await tx.execute(sql`delete from kliniva.appointment_events where tenant_id = ${id}`);
+      await tx.execute(sql`delete from kliniva.appointments where tenant_id = ${id}`);
       await tx.execute(sql`delete from kliniva.consent_revocations where tenant_id = ${id}`);
       await tx.execute(sql`delete from kliniva.consent_choices where tenant_id = ${id}`);
       await tx.execute(sql`delete from kliniva.patient_documents where tenant_id = ${id}`);

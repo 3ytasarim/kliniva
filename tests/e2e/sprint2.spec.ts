@@ -1,6 +1,5 @@
-import { execSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
+import { E2E_SURNAME, EMAIL, PASSWORD, login, noOverflow, purgeE2EData, watch } from "./support/helpers";
 
 /**
  * Sprint 2 E2E — gerçek tarayıcıda tam akış: yeni hasta → KVKK aydınlatma → açık rıza → statik imza → tamamlandı →
@@ -8,69 +7,9 @@ import { expect, test, type Page } from "@playwright/test";
  * 768x1024 (tablet) ve 1440x900 (masaüstü). CSP ihlali, konsol hatası ve yatay taşma OLMAMALI.
  * Oluşturulan hastalar ayırt edici soyadla açılır ve test sonunda yasal imha yoluyla temizlenir.
  */
-if (existsSync(".env.local")) process.loadEnvFile(".env.local");
-const SLUG = process.env.SEED_TENANT_SLUG ?? "demo-klinik";
-const EMAIL = process.env.SEED_OWNER_EMAIL ?? "";
-const PASSWORD = process.env.SEED_OWNER_PASSWORD ?? "";
-const E2E_SURNAME = "E2E-Otomasyon";
-
 test.describe.configure({ mode: "serial", timeout: 120_000 });
 
-test.afterAll(() => {
-  // Sabit komut (kullanıcı girdisi yok).
-  execSync("npx tsx --conditions=react-server tests/e2e/support/purge-e2e-patients.ts", { stdio: "inherit" });
-});
-
-function watch(page: Page) {
-  const problems: string[] = [];
-  page.on("console", (m) => {
-    if (m.type() === "error" || /Content Security Policy|Refused to (execute|load|apply)/i.test(m.text())) {
-      problems.push(`${m.type()}: ${m.text()} @ ${new URL(m.location().url || "http://x/").pathname}`);
-    }
-  });
-  page.on("pageerror", (e) => problems.push(`pageerror: ${e.message}`));
-  page.on("response", (r) => {
-    if (r.status() >= 400) problems.push(`http ${r.status()}: ${new URL(r.url()).pathname}`);
-  });
-  return problems;
-}
-
-async function login(page: Page) {
-  await page.goto("/login");
-  await page.getByLabel("Klinik kodu").fill(SLUG);
-  await page.getByLabel("E-posta").fill(EMAIL);
-  await page.getByLabel("Parola").fill(PASSWORD);
-  await page.getByRole("button", { name: "Giriş yap" }).click();
-  await expect(page).toHaveURL(/\/dashboard$/);
-}
-
-async function noOverflow(page: Page, where: string) {
-  const offenders = await page.evaluate(() => {
-    if (document.documentElement.scrollWidth <= window.innerWidth + 1) return [];
-    // Tanılama: görünür alanın sağına taşan en dıştaki öğeler (kaydırılabilir kapsayıcı içindekiler hariç).
-    const out: string[] = [];
-    for (const el of Array.from(document.querySelectorAll("body *"))) {
-      const r = el.getBoundingClientRect();
-      if (r.right <= window.innerWidth + 1 || r.width === 0) continue;
-      let p = el.parentElement;
-      let clipped = false;
-      while (p && p !== document.body) {
-        const ov = getComputedStyle(p).overflowX;
-        if (ov === "auto" || ov === "hidden" || ov === "scroll") {
-          clipped = true;
-          break;
-        }
-        p = p.parentElement;
-      }
-      if (!clipped)
-        out.push(
-          `${el.tagName.toLowerCase()}.${String(el.className).slice(0, 80)} right=${Math.round(r.right)}`,
-        );
-    }
-    return out.slice(0, 8);
-  });
-  expect(offenders, `yatay taşma: ${where}`).toEqual([]);
-}
+test.afterAll(purgeE2EData);
 
 async function drawSignature(page: Page) {
   const canvas = page.getByTestId("signature-canvas");
@@ -105,7 +44,9 @@ for (const viewport of [
     await page.getByRole("button", { name: "Devam et" }).click();
 
     // 2 — KVKK aydınlatma (bilgilendirme; rıza değil)
-    await expect(page.getByRole("region", { name: "Belge metni" })).toContainText("6698");
+    await expect(page.getByRole("region", { name: "Belge metni" })).toContainText("6698", {
+      timeout: 15_000,
+    });
     await noOverflow(page, "adım 2");
     const cont = page.getByRole("button", { name: "Devam et" });
     await expect(cont).toBeDisabled();

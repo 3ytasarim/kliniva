@@ -18,7 +18,7 @@ const MAIN: NavItem[] = [
   { href: "/dashboard", label: "Panel", icon: "dashboard", perm: "clinic.read" },
   { href: "/doctor", label: "Planım", icon: "calendar", perm: "doctor.self.read" },
   { href: "/patients", label: "Hastalar", icon: "patients", perm: "patient.read" },
-  { soon: true, label: "Randevular", icon: "calendar" },
+  { href: "/appointments", label: "Randevular", icon: "calendar", perm: "appointment.read" },
   { href: "/admin/doctors", label: "Doktorlar", icon: "doctor", perm: "doctor.read" },
   { href: "/admin/branches", label: "Şubeler", icon: "branch", perm: "branch.read" },
   { href: "/admin/rooms", label: "Odalar", icon: "room", perm: "room.read" },
@@ -34,6 +34,7 @@ const SETTINGS: NavItem[] = [
     icon: "reports",
     perm: "document.template.manage",
   },
+  { href: "/settings/services", label: "Hizmetler", icon: "settings", perm: "service.manage" },
   { href: "/admin/users", label: "Kullanıcılar", icon: "users", perm: "user.read" },
 ];
 

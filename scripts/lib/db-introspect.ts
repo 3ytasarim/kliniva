@@ -33,6 +33,10 @@ export const EXPECTED_TABLES = [
   "tenants",
   "user_roles",
   "users",
+  "appointment_events",
+  "appointments",
+  "clinical_services",
+  "doctor_services",
 ] as const;
 
 /** RLS (ENABLE + FORCE) zorunlu tablolar: kiracı tabloları + platform/kiracı karışık tablolar. */
@@ -57,6 +61,10 @@ export const RLS_TABLES = [
   "rooms",
   "user_roles",
   "users",
+  "appointment_events",
+  "appointments",
+  "clinical_services",
+  "doctor_services",
 ] as const;
 
 /** Uygulama rolünün tablo bazında OLMASI GEREKEN yetkiler (fazlası da eksiği de hata). */
@@ -89,6 +97,11 @@ export const APP_PRIVILEGES: Record<string, string[]> = {
   // Sprint 2
   patient_branches: ["INSERT", "SELECT", "UPDATE"],
   consent_revocations: ["INSERT", "SELECT"],
+  // Sprint 3
+  clinical_services: ["INSERT", "SELECT", "UPDATE"],
+  doctor_services: ["INSERT", "SELECT", "UPDATE"],
+  appointments: ["INSERT", "SELECT", "UPDATE"],
+  appointment_events: ["INSERT", "SELECT"],
 };
 
 export function isPoolerUrl(url: string | undefined): boolean | null {

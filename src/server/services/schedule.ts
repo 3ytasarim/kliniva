@@ -365,7 +365,29 @@ async function assertNoAssignmentConflicts(scope: TenantScope, draft: Assignment
             eq(doctorRoomAssignments.active, true),
           ),
         );
-      const stillThere = subtract([other], moved.map(toInterval));
+      // Sprint 3 düzeltmesi: o doktor o tarihte izinliyse (tüm gün / saat aralığı) haftalık odası o süre boştur.
+      const leave = await scope.tx
+        .select({
+          type: doctorScheduleExceptions.type,
+          startTime: doctorScheduleExceptions.startTime,
+          endTime: doctorScheduleExceptions.endTime,
+        })
+        .from(doctorScheduleExceptions)
+        .where(
+          tenantWhere(
+            doctorScheduleExceptions,
+            scope,
+            eq(doctorScheduleExceptions.doctorId, r.doctorId),
+            eq(doctorScheduleExceptions.date, draft.effectiveDate!),
+            or(
+              isNull(doctorScheduleExceptions.branchId),
+              eq(doctorScheduleExceptions.branchId, draft.branchId),
+            ),
+          ),
+        );
+      if (leave.some((l) => l.type === "ALL_DAY")) continue;
+      const away = leave.map((l) => toInterval({ startTime: l.startTime!, endTime: l.endTime! }));
+      const stillThere = subtract([other], [...moved.map(toInterval), ...away]);
       const hit = stillThere.find((i) => overlaps(i, draft.interval));
       clash = hit ?? null;
     }

@@ -2,9 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/server/auth/guards";
-import { formToObject, runAction, type ActionState } from "@/server/action-result";
-import { isAppError, type AppErrorCode } from "@/server/errors";
-import { logger } from "@/server/log/logger";
+import { formToObject, runAction, runData, type ActionState, type DataResult } from "@/server/action-result";
 import {
   createPatient,
   findPossibleDuplicatePatients,
@@ -26,26 +24,7 @@ import {
  * Hasta CRM + KVKK akışı server action'ları. Her biri: requireUser() → servis (yetki + Zod + kiracı/şube kapsamı +
  * audit). İstemciye yalnızca hata KODU ve genel mesaj döner; ayrıntı / veri sızmaz.
  */
-export type DataResult<T> =
-  { ok: true; data: T } | { ok: false; code: AppErrorCode | "INTERNAL"; message: string; fields?: string[] };
-
-async function runData<T>(fn: () => Promise<T>): Promise<DataResult<T>> {
-  try {
-    return { ok: true, data: await fn() };
-  } catch (e) {
-    if (
-      e &&
-      typeof e === "object" &&
-      "digest" in e &&
-      String((e as { digest: unknown }).digest).startsWith("NEXT_")
-    ) {
-      throw e;
-    }
-    if (isAppError(e)) return { ok: false, code: e.code, message: e.message, fields: e.fields };
-    logger.error("action.unhandled_error", { error: e });
-    return { ok: false, code: "INTERNAL", message: "Beklenmeyen bir hata oluştu." };
-  }
-}
+export type { DataResult };
 
 // ---------------------------------------------------------------- hasta
 export async function checkDuplicatesAction(input: {

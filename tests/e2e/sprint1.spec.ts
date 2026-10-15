@@ -1,24 +1,10 @@
-import { existsSync } from "node:fs";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+import { EMAIL, PASSWORD, login } from "./support/helpers";
 
 /**
  * Sprint 1 E2E — gerçek giriş (seed klinik sahibi; kimlik bilgileri .env.local'dan, çıktıya yazılmaz) ve yeni
  * ekranların üretim build'inde CSP ihlali olmadan render edilmesi.
  */
-if (existsSync(".env.local")) process.loadEnvFile(".env.local");
-const SLUG = process.env.SEED_TENANT_SLUG ?? "demo-klinik";
-const EMAIL = process.env.SEED_OWNER_EMAIL ?? "";
-const PASSWORD = process.env.SEED_OWNER_PASSWORD ?? "";
-
-async function login(page: Page) {
-  await page.goto("/login");
-  await page.getByLabel("Klinik kodu").fill(SLUG);
-  await page.getByLabel("E-posta").fill(EMAIL);
-  await page.getByLabel("Parola").fill(PASSWORD);
-  await page.getByRole("button", { name: "Giriş yap" }).click();
-  await expect(page).toHaveURL(/\/dashboard$/);
-}
-
 test("yeni korumalı ekranlar oturumsuz /login'e yönlendirir", async ({ page }) => {
   for (const path of ["/settings/clinic", "/admin/doctors", "/doctor", "/admin/branches"]) {
     await page.goto(path);
@@ -39,9 +25,10 @@ test("klinik sahibi: sidebar, klinik ayarları, şubeler, odalar, doktorlar — 
   const nav = page.getByRole("navigation", { name: "Ana menü" });
   await expect(nav.getByRole("link", { name: "Doktorlar" })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Şubeler" })).toBeVisible();
-  // Geliştirilmemiş özellikler bağlantı DEĞİL (tıklanamaz, "Yakında").
-  await expect(nav.getByRole("link", { name: /Randevular/ })).toHaveCount(0);
-  await expect(nav.getByText("Randevular")).toBeVisible();
+  // Geliştirilmemiş özellikler bağlantı DEĞİL (tıklanamaz, "Yakında"). Randevular Sprint 3 ile aktif.
+  await expect(nav.getByRole("link", { name: /Stok/ })).toHaveCount(0);
+  await expect(nav.getByText("Stok")).toBeVisible();
+  await expect(nav.getByRole("link", { name: "Randevular" })).toBeVisible();
 
   const pages: [string, RegExp][] = [
     ["/settings/clinic", /Klinik profili/],

@@ -13,7 +13,14 @@ export type AppErrorCode =
   | "ROOM_SCHEDULE_CONFLICT"
   | "DOCTOR_SCHEDULE_CONFLICT"
   | "DOCUMENT_ALREADY_SIGNED"
-  | "DOCUMENT_INTEGRITY_FAILED";
+  | "DOCUMENT_INTEGRITY_FAILED"
+  | "APPOINTMENT_CONFLICT"
+  | "ROOM_APPOINTMENT_CONFLICT"
+  | "PATIENT_APPOINTMENT_CONFLICT"
+  | "SLOT_NOT_AVAILABLE"
+  | "APPOINTMENT_IN_PAST"
+  | "BOOKING_OUT_OF_RANGE"
+  | "INVALID_STATUS_TRANSITION";
 
 const STATUS: Record<AppErrorCode, number> = {
   UNAUTHENTICATED: 401,
@@ -27,6 +34,13 @@ const STATUS: Record<AppErrorCode, number> = {
   DOCTOR_SCHEDULE_CONFLICT: 409,
   DOCUMENT_ALREADY_SIGNED: 409,
   DOCUMENT_INTEGRITY_FAILED: 422,
+  APPOINTMENT_CONFLICT: 409,
+  ROOM_APPOINTMENT_CONFLICT: 409,
+  PATIENT_APPOINTMENT_CONFLICT: 409,
+  SLOT_NOT_AVAILABLE: 409,
+  APPOINTMENT_IN_PAST: 422,
+  BOOKING_OUT_OF_RANGE: 422,
+  INVALID_STATUS_TRANSITION: 409,
 };
 
 const MESSAGES: Record<AppErrorCode, string> = {
@@ -41,6 +55,13 @@ const MESSAGES: Record<AppErrorCode, string> = {
   DOCTOR_SCHEDULE_CONFLICT: "Doktorun bu zaman aralığında başka bir planı var.",
   DOCUMENT_ALREADY_SIGNED: "Bu belge zaten imzalanmış.",
   DOCUMENT_INTEGRITY_FAILED: "Belge bütünlük doğrulamasından geçemedi; belge sunulamıyor.",
+  APPOINTMENT_CONFLICT: "Doktorun bu saatte başka bir randevusu var.",
+  ROOM_APPOINTMENT_CONFLICT: "Bu saatte uygun oda kalmadı.",
+  PATIENT_APPOINTMENT_CONFLICT: "Hastanın bu saatle çakışan başka bir randevusu var.",
+  SLOT_NOT_AVAILABLE: "Seçilen saat artık uygun değil. Lütfen uygun saatleri yenileyin.",
+  APPOINTMENT_IN_PAST: "Geçmiş bir zamana randevu oluşturulamaz.",
+  BOOKING_OUT_OF_RANGE: "Seçilen tarih randevu alınabilecek aralığın dışında.",
+  INVALID_STATUS_TRANSITION: "Randevu bu duruma geçirilemez.",
 };
 
 export class AppError extends Error {

@@ -28,7 +28,8 @@ Gün: ISO-8601 (1 = Pazartesi … 7 = Pazar). Saatler şubenin yerel saatidir. A
 
 Kurallar: doktor aynı anda iki şubede/odada olamaz; oda aynı anda iki doktora verilemez; oda ataması doktorun o
 şube/gündeki çalışma bloğunun içinde olmalıdır; tarihli override doktorun o tarih/saatteki haftalık atamasının
-yerine geçer (boşalttığı oda o aralıkta başka doktora verilebilir).
+yerine geçer (boşalttığı oda o aralıkta başka doktora verilebilir). Sprint 3: doktor izinliyse (tüm gün veya saat
+aralığı) haftalık oda ataması o süre için odayı TUTMAZ — tarihli atama ve randevu motoru bunu dikkate alır.
 
 ## Müsaitlik temeli
 
@@ -40,7 +41,7 @@ yerine geçer (boşalttığı oda o aralıkta başka doktora verilebilir).
 → her pencere yerel "HH:MM" + UTC ISO (IANA saat dilimi; sabit +03:00 yok)
 ```
 
-Sprint 2'de randevular bu pencerelerden düşülecektir. Saf hesaplama `src/server/scheduling/availability.ts`,
+Sprint 3 randevu motoru (`docs/APPOINTMENTS.md`) bu pencerelerden randevuları ve dolu odaları düşer. Saf hesaplama `src/server/scheduling/availability.ts`,
 saat dilimi yardımcıları `src/lib/time.ts` (yaz saati geçişleri test edildi).
 
 ## Yetki

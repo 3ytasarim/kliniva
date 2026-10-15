@@ -32,6 +32,20 @@ export const PERMISSIONS = {
   "doctor.schedule.read": "Doktor çalışma planlarını görüntüleme",
   "doctor.schedule.manage": "Doktor çalışma planı, oda ataması, izin yönetimi",
   "doctor.self.read": "Doktorun kendi planını görüntülemesi",
+  // Sprint 3 — hizmetler ve randevular
+  "service.read": "Klinik hizmetlerini (işlem tiplerini) görüntüleme",
+  "service.manage": "Klinik hizmetleri ve doktor-hizmet eşleşmelerini yönetme",
+  "appointment.read": "Randevuları görüntüleme (şube kapsamında)",
+  "appointment.read.own": "Doktorun YALNIZCA kendi randevularını görüntülemesi",
+  "appointment.create": "Randevu oluşturma",
+  "appointment.update": "Randevuyu onaylama / operasyon notu",
+  "appointment.reschedule": "Randevu taşıma",
+  "appointment.cancel": "Randevu iptali",
+  "appointment.checkin": "Hasta girişi (check-in)",
+  "appointment.start": "Randevuyu başlatma (işlemde)",
+  "appointment.complete": "Randevuyu tamamlama",
+  "appointment.no_show": "Gelmedi olarak işaretleme",
+  "appointment.availability.read": "Doktor uygunluğunu / boş saatleri görüntüleme",
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;
@@ -61,6 +75,20 @@ const PATIENT_DOCUMENT_FLOW: Permission[] = [
   "patient.document.sign",
 ];
 
+/** Randevu yönetiminin tamamı (şube kapsamı ayrıca uygulanır). */
+const APPOINTMENT_FULL: Permission[] = [
+  "appointment.read",
+  "appointment.create",
+  "appointment.update",
+  "appointment.reschedule",
+  "appointment.cancel",
+  "appointment.checkin",
+  "appointment.start",
+  "appointment.complete",
+  "appointment.no_show",
+  "appointment.availability.read",
+];
+
 const ADMIN_BASE: Permission[] = [
   "clinic.read",
   "branch.read",
@@ -83,6 +111,10 @@ const ADMIN_BASE: Permission[] = [
   "doctor.schedule.manage",
   // Yalnızca kullanıcının KENDİ doktor profili varsa anlamlıdır (başkasının verisine erişim vermez).
   "doctor.self.read",
+  "service.read",
+  "service.manage",
+  ...APPOINTMENT_FULL,
+  "appointment.read.own",
 ];
 
 export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permission[] }> = {
@@ -110,6 +142,8 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       "doctor.read",
       "doctor.schedule.read",
       "doctor.schedule.manage",
+      "service.read",
+      ...APPOINTMENT_FULL,
     ],
   },
   // Doktor: hasta kaydı açmaz / belge imzalatmaz (resepsiyon akışı). Tıbbi notu yazabilmesi için patient.update.
@@ -126,6 +160,12 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       "patient.document.read",
       // Yalnızca KENDİ planını görür; plan değişikliği klinik politikasına bağlı (şimdilik yönetim rolleri).
       "doctor.self.read",
+      // Randevu: yalnızca KENDİ randevuları; muayeneyi başlatır / tamamlar. Check-in resepsiyondadır.
+      "service.read",
+      "appointment.read.own",
+      "appointment.start",
+      "appointment.complete",
+      "appointment.availability.read",
     ],
   },
   ASSISTANT: {
@@ -140,6 +180,9 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       "patient.document.read",
       "doctor.read",
       "doctor.schedule.read",
+      "service.read",
+      "appointment.read",
+      "appointment.availability.read",
     ],
   },
   RECEPTION: {
@@ -154,8 +197,26 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       ...PATIENT_DOCUMENT_FLOW,
       "doctor.read",
       "doctor.schedule.read",
+      "service.read",
+      "appointment.read",
+      "appointment.create",
+      "appointment.update",
+      "appointment.reschedule",
+      "appointment.cancel",
+      "appointment.checkin",
+      "appointment.availability.read",
     ],
   },
   INVENTORY_MANAGER: { name: "Stok Sorumlusu", permissions: ["clinic.read", "branch.read", "room.read"] },
-  READ_ONLY: { name: "Salt Okunur", permissions: ["clinic.read", "branch.read", "room.read", "doctor.read"] },
+  READ_ONLY: {
+    name: "Salt Okunur",
+    permissions: [
+      "clinic.read",
+      "branch.read",
+      "room.read",
+      "doctor.read",
+      "service.read",
+      "appointment.read",
+    ],
+  },
 };

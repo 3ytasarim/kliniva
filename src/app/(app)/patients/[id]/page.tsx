@@ -7,6 +7,9 @@ import { isAppError } from "@/server/errors";
 import { getPatient, getPatientActivity } from "@/server/services/patients";
 import { getPatientConsentStates, listPatientDocuments, listTemplates } from "@/server/services/documents";
 import { revokeConsentAction, voidDocumentAction } from "@/app/actions/patients";
+import { listPatientAppointments } from "@/server/services/appointments";
+import { AppointmentStatusBadge, formatLocalDate } from "@/components/appointment-ui";
+import type { AppointmentListItem } from "@/server/services/appointments";
 import { ActionForm, Field, SelectField } from "@/components/action-form";
 import { Forbidden } from "@/components/forbidden";
 import { NewDocumentButton } from "@/components/new-document-button";
@@ -25,7 +28,7 @@ import {
 
 export const metadata: Metadata = { title: "Hasta" };
 
-type Tab = "overview" | "documents" | "activity";
+type Tab = "overview" | "appointments" | "documents" | "activity";
 
 const REVOKE_CHANNELS = [
   { value: "IN_PERSON", label: "Yüz yüze" },
@@ -37,7 +40,7 @@ const REVOKE_CHANNELS = [
 ];
 
 /**
- * Hasta dosyası. Sekmeler: Genel bakış · Belgeler · Aktivite · Randevular (yakında).
+ * Hasta dosyası. Sekmeler: Genel bakış · Randevular · Belgeler · Aktivite.
  * Tıbbi sekme bu sprintte YOK; sağlık notu bu ekranda gösterilmez.
  */
 export default async function PatientPage({
@@ -62,18 +65,21 @@ export default async function PatientPage({
 
   const canDocs = hasPermission(ctx, "patient.document.read");
   const canActivity = hasPermission(ctx, "audit.read");
+  const canAppts = hasPermission(ctx, "appointment.read") || hasPermission(ctx, "appointment.read.own");
   const tab: Tab =
     sp.tab === "documents" && canDocs
       ? "documents"
       : sp.tab === "activity" && canActivity
         ? "activity"
-        : "overview";
+        : sp.tab === "appointments" && canAppts
+          ? "appointments"
+          : "overview";
 
-  const tabs: { key: Tab | "appointments"; label: string; show: boolean; soon?: boolean }[] = [
+  const tabs: { key: Tab; label: string; show: boolean; soon?: boolean }[] = [
     { key: "overview", label: "Genel bakış", show: true },
+    { key: "appointments", label: "Randevular", show: canAppts },
     { key: "documents", label: "Belgeler", show: canDocs },
     { key: "activity", label: "Aktivite", show: canActivity },
-    { key: "appointments", label: "Randevular", show: true, soon: true },
   ];
 
   return (
@@ -132,6 +138,7 @@ export default async function PatientPage({
       {tab === "overview" ? <Overview ctx={ctx} patient={patient} canDocs={canDocs} /> : null}
       {tab === "documents" ? <Documents ctx={ctx} patientId={patient.id} /> : null}
       {tab === "activity" ? <Activity ctx={ctx} patientId={patient.id} /> : null}
+      {tab === "appointments" ? <Appointments ctx={ctx} patientId={patient.id} /> : null}
     </section>
   );
 }
@@ -376,5 +383,62 @@ async function Activity({ ctx, patientId }: { ctx: Ctx; patientId: string }) {
         </li>
       ))}
     </ol>
+  );
+}
+
+function AppointmentRows({ title, items }: { title: string; items: AppointmentListItem[] }) {
+  return (
+    <div className="card overflow-x-auto p-0">
+      <h2 className="px-5 pt-5 font-semibold">{title}</h2>
+      {items.length === 0 ? (
+        <p className="px-5 pb-5 pt-2 text-sm text-slate-500">Kayıt yok.</p>
+      ) : (
+        <table className="table mt-3">
+          <thead>
+            <tr>
+              <th scope="col">Tarih</th>
+              <th scope="col">Doktor</th>
+              <th scope="col">Şube</th>
+              <th scope="col">Hizmet</th>
+              <th scope="col">Durum</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((a) => (
+              <tr key={a.id}>
+                <td className="whitespace-nowrap">
+                  <Link href={`/appointments/${a.id}`} className="font-medium hover:text-brand-700">
+                    {formatLocalDate(a.localDate)} · {a.localStart}
+                  </Link>
+                </td>
+                <td>{a.doctor.name}</td>
+                <td>{a.branch.name}</td>
+                <td>{a.service?.name ?? "—"}</td>
+                <td>
+                  <AppointmentStatusBadge status={a.status} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+async function Appointments({ ctx, patientId }: { ctx: Ctx; patientId: string }) {
+  const { upcoming, past } = await listPatientAppointments(ctx, patientId);
+  return (
+    <div className="grid gap-6">
+      {hasPermission(ctx, "appointment.create") ? (
+        <div>
+          <Link href={`/appointments/new?patient=${patientId}`} className="btn">
+            + Bu hastaya randevu
+          </Link>
+        </div>
+      ) : null}
+      <AppointmentRows title="Yaklaşan randevular" items={upcoming} />
+      <AppointmentRows title="Geçmiş randevular" items={past} />
+    </div>
   );
 }

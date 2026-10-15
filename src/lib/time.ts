@@ -116,3 +116,47 @@ export function zonedDateTimeToUtc(date: string, minutes: number, tz: string): D
   guess = naive - zoneOffsetMinutes(new Date(guess), tz) * 60000;
   return new Date(guess);
 }
+
+/** Anın saat dilimindeki yerel takvim tarihi + gece yarısından itibaren dakika (duvar saati). */
+export function localDateTimeOf(instant: Date, tz: string): { date: string; minutes: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).formatToParts(instant);
+  const get = (t: string) => parts.find((p) => p.type === t)!.value;
+  return {
+    date: `${get("year")}-${get("month")}-${get("day")}`,
+    minutes: Number(get("hour")) * 60 + Number(get("minute")),
+  };
+}
+
+/**
+ * Yerel saatin yaz saati geçişindeki durumu:
+ *  - NONEXISTENT: ileri alınan saatte hiç yaşanmayan yerel saat (ör. Berlin 31 Mart 02:30).
+ *  - AMBIGUOUS: geri alınan saatte iki kez yaşanan yerel saat (ör. Berlin 27 Ekim 02:30).
+ * Randevu motoru bu saatlerde slot ÜRETMEZ (güvenli varsayılan).
+ */
+export function localTimeStatus(
+  date: string,
+  minutes: number,
+  tz: string,
+): "OK" | "NONEXISTENT" | "AMBIGUOUS" {
+  const utc = zonedDateTimeToUtc(date, minutes, tz);
+  const back = localDateTimeOf(utc, tz);
+  if (back.date !== date || back.minutes !== minutes) return "NONEXISTENT";
+  const before = zoneOffsetMinutes(new Date(utc.getTime() - 36 * 3600_000), tz);
+  const after = zoneOffsetMinutes(new Date(utc.getTime() + 36 * 3600_000), tz);
+  if (before !== after) {
+    const shift = Math.abs(after - before) * 60_000;
+    for (const alt of [utc.getTime() - shift, utc.getTime() + shift]) {
+      const l = localDateTimeOf(new Date(alt), tz);
+      if (l.date === date && l.minutes === minutes) return "AMBIGUOUS";
+    }
+  }
+  return "OK";
+}

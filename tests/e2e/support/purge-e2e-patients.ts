@@ -1,6 +1,6 @@
 /**
  * E2E temizliği — yalnızca E2E testinin seed klinikte oluşturduğu hastaları (soyadı E2E_SURNAME) yasal imha yoluyla
- * (kliniva.retention_purge = 'on', migration rolü) siler: rıza geri çekmeleri, seçimler, belgeler, şube bağları,
+ * (kliniva.retention_purge = 'on', migration rolü) siler: randevular + geçmişi, rıza geri çekmeleri, seçimler, belgeler, şube bağları,
  * hasta. Depodaki şifreli belge / imza nesneleri de imha bağlamında silinir. Audit kayıtları (PII içermez) korunur.
  * Başka hiçbir kayda dokunmaz. Çıktıda yalnızca sayılar vardır.
  *
@@ -40,6 +40,11 @@ async function main() {
           where tenant_id = ${t.id} and patient_id in (${list})`,
     );
     for (const d of docs.rows) for (const k of [d.p, d.s]) if (k) keys.push(k);
+    await tx.execute(sql`delete from kliniva.appointment_events where tenant_id = ${t.id} and appointment_id in
+      (select id from kliniva.appointments where tenant_id = ${t.id} and patient_id in (${list}))`);
+    await tx.execute(
+      sql`delete from kliniva.appointments where tenant_id = ${t.id} and patient_id in (${list})`,
+    );
     await tx.execute(
       sql`delete from kliniva.consent_revocations where tenant_id = ${t.id} and patient_id in (${list})`,
     );

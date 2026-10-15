@@ -1,5 +1,5 @@
 import "server-only";
-import { isAppError } from "@/server/errors";
+import { isAppError, type AppErrorCode } from "@/server/errors";
 import { logger } from "@/server/log/logger";
 
 /** Server Action dönüş tipi — istemciye yalnızca genel mesaj ve alan adları gider. */
@@ -22,6 +22,28 @@ export async function runAction(fn: () => Promise<string | void>): Promise<Actio
     if (isAppError(e)) return { ok: false, message: e.message, fields: e.fields };
     logger.error("action.unhandled_error", { error: e });
     return { ok: false, message: "Beklenmeyen bir hata oluştu." };
+  }
+}
+
+/** Veri döndüren server action sonucu (istemci bileşenleri için). */
+export type DataResult<T> =
+  { ok: true; data: T } | { ok: false; code: AppErrorCode | "INTERNAL"; message: string; fields?: string[] };
+
+export async function runData<T>(fn: () => Promise<T>): Promise<DataResult<T>> {
+  try {
+    return { ok: true, data: await fn() };
+  } catch (e) {
+    if (
+      e &&
+      typeof e === "object" &&
+      "digest" in e &&
+      String((e as { digest: unknown }).digest).startsWith("NEXT_")
+    ) {
+      throw e;
+    }
+    if (isAppError(e)) return { ok: false, code: e.code, message: e.message, fields: e.fields };
+    logger.error("action.unhandled_error", { error: e });
+    return { ok: false, code: "INTERNAL", message: "Beklenmeyen bir hata oluştu." };
   }
 }
 

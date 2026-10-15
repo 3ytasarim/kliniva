@@ -36,7 +36,14 @@ müsaitlik hesabı. Ayrıntı: `docs/SCHEDULING.md`.
 | Bütünlük doğrulama, dosya uç noktası, özel depo (local + S3/R2 SigV4)                     | ✅    |
 | Rıza durumu (GRANTED/DENIED/REVOKED/NOT_ASKED) ve geri çekme                              | ✅    |
 
-## Sprint 3+ (öneri)
+## Sprint 3 — Randevu motoru ✅
 
-Randevu motoru, Voice AI (yetki kontrollü araçlar, `source = AI_VOICE`), stok, raporlama, KVKK m.11 bilgi talebi
+Klinik hizmetleri + doktor-hizmet eşleşmesi, uygunluk motoru (oda tahsisi dahil), doktor/oda/hasta çakışma
+motoru (servis + exclusion constraint), eşzamanlı rezervasyon güvenliği, atomik taşıma, durum makinesi (DB
+tetikleyicisi), takvim (gün/hafta), yeni randevu akışı, randevu detayı, doktor portalı bugünkü liste, panel kartları,
+hasta dosyası randevular sekmesi, Sprint 1 izin/oda düzeltmesi. Ayrıntı: `docs/APPOINTMENTS.md`.
+
+## Sprint 4+ (öneri)
+
+Voice AI (yetki kontrollü araçlar, `source = AI_VOICE`), stok, raporlama, KVKK m.11 bilgi talebi
 dışa aktarımı ve düzeltme akışı, MFA zorunluluğu, orphan depo nesnesi temizliği.

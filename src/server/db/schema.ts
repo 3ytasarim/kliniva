@@ -504,6 +504,14 @@ export const clinicProfiles = kliniva.table(
     defaultAppointmentDurationMinutes: integer("default_appointment_duration_minutes").notNull().default(30),
     /** Okunabilir hasta numarası öneki (KLI-000001). */
     patientNumberPrefix: text("patient_number_prefix").notNull().default("KLI"),
+    /** Randevu: şimdiden en az kaç dakika sonrası alınabilir (0 = hemen). */
+    minBookingNoticeMinutes: integer("min_booking_notice_minutes").notNull().default(0),
+    /** Randevu: en fazla kaç gün ilerisi. */
+    maxBookingDaysAhead: integer("max_booking_days_ahead").notNull().default(365),
+    /** İptalde gerekçe zorunlu mu. */
+    cancellationReasonRequired: boolean("cancellation_reason_required").notNull().default(true),
+    /** Uygun saat listesinin adımı (dakika). */
+    slotIntervalMinutes: integer("slot_interval_minutes").notNull().default(15),
     active: boolean("active").notNull().default(true),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -511,6 +519,9 @@ export const clinicProfiles = kliniva.table(
   (t) => [
     check("clinic_profiles_prefix_ck", sql`${t.patientNumberPrefix} ~ '^[A-Z0-9]{2,8}$'`),
     check("clinic_profiles_duration_ck", sql`${t.defaultAppointmentDurationMinutes} between 5 and 480`),
+    check("clinic_profiles_notice_ck", sql`${t.minBookingNoticeMinutes} between 0 and 10080`),
+    check("clinic_profiles_horizon_ck", sql`${t.maxBookingDaysAhead} between 1 and 730`),
+    check("clinic_profiles_slot_ck", sql`${t.slotIntervalMinutes} in (5, 10, 15, 20, 30, 60)`),
   ],
 );
 
@@ -795,5 +806,201 @@ export const consentRevocations = kliniva.table(
       sql`${t.channel} in ('IN_PERSON', 'PHONE', 'EMAIL', 'WRITTEN', 'PORTAL', 'OTHER')`,
     ),
     index("consent_revocations_patient_idx").on(t.tenantId, t.patientId),
+  ],
+);
+
+// ---------------------------------------------------------------- Sprint 3: hizmetler + randevular
+
+export const appointmentStatus = kliniva.enum("appointment_status", [
+  "DRAFT",
+  "BOOKED",
+  "CONFIRMED",
+  "CHECKED_IN",
+  "IN_PROGRESS",
+  "COMPLETED",
+  "CANCELLED",
+  "NO_SHOW",
+]);
+export const appointmentSource = kliniva.enum("appointment_source", [
+  "STAFF",
+  "DOCTOR",
+  "PATIENT_PORTAL",
+  "AI_VOICE",
+  "API",
+]);
+export const appointmentEventType = kliniva.enum("appointment_event_type", [
+  "CREATED",
+  "RESCHEDULED",
+  "CONFIRMED",
+  "CHECKED_IN",
+  "STARTED",
+  "COMPLETED",
+  "CANCELLED",
+  "NO_SHOW",
+  "NOTES_UPDATED",
+]);
+
+/** [INTERNAL] Klinik hizmeti / işlem tipi (Muayene 30 dk, PRP 45 dk …). Oda tipi kısıtı isteğe bağlı. */
+export const clinicalServices = kliniva.table(
+  "clinical_services",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    code: text("code"),
+    description: text("description"),
+    defaultDurationMinutes: integer("default_duration_minutes").notNull().default(30),
+    requiresRoom: boolean("requires_room").notNull().default(true),
+    /** NULL / boş → oda tipi kısıtı yok (aktif her oda). */
+    allowedRoomTypes: roomType("allowed_room_types").array(),
+    active: boolean("active").notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    unique("clinical_services_tenant_id_uq").on(t.tenantId, t.id),
+    unique("clinical_services_tenant_name_uq").on(t.tenantId, t.name),
+    unique("clinical_services_tenant_code_uq").on(t.tenantId, t.code),
+    check("clinical_services_duration_ck", sql`${t.defaultDurationMinutes} between 5 and 480`),
+  ],
+);
+
+/** Doktorun verebildiği hizmetler (+ isteğe bağlı süre override'ı). */
+export const doctorServices = kliniva.table(
+  "doctor_services",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    doctorId: uuid("doctor_id").notNull(),
+    serviceId: uuid("service_id").notNull(),
+    durationMinutesOverride: integer("duration_minutes_override"),
+    active: boolean("active").notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: "doctor_services_doctor_fk",
+      columns: [t.tenantId, t.doctorId],
+      foreignColumns: [doctorProfiles.tenantId, doctorProfiles.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "doctor_services_service_fk",
+      columns: [t.tenantId, t.serviceId],
+      foreignColumns: [clinicalServices.tenantId, clinicalServices.id],
+    }).onDelete("cascade"),
+    unique("doctor_services_uq").on(t.tenantId, t.doctorId, t.serviceId),
+    check(
+      "doctor_services_duration_ck",
+      sql`${t.durationMinutesOverride} is null or ${t.durationMinutesOverride} between 5 and 480`,
+    ),
+  ],
+);
+
+/**
+ * [PERSONAL] Randevu. Zamanlar UTC (timestamptz); timezone = şubenin IANA saat dilimi (gösterim için).
+ * Çakışmalar (doktor / oda / hasta) aktif statülerde exclusion constraint ile VERİTABANINDA imkânsızdır
+ * (0008_appointments_security.sql). Durum geçişleri tetikleyiciyle korunur; fiziksel silme yoktur.
+ */
+export const appointments = kliniva.table(
+  "appointments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    branchId: uuid("branch_id").notNull(),
+    patientId: uuid("patient_id").notNull(),
+    doctorId: uuid("doctor_id").notNull(),
+    roomId: uuid("room_id"),
+    serviceId: uuid("service_id"),
+    status: appointmentStatus("status").notNull().default("BOOKED"),
+    scheduledStart: timestamp("scheduled_start", { withTimezone: true }).notNull(),
+    scheduledEnd: timestamp("scheduled_end", { withTimezone: true }).notNull(),
+    timezone: text("timezone").notNull(),
+    durationMinutes: integer("duration_minutes").notNull(),
+    source: appointmentSource("source").notNull().default("STAFF"),
+    /** [SENSITIVE] Operasyon notu — AES-256-GCM (tıbbi kayıt DEĞİL). */
+    notesEncrypted: text("notes_encrypted"),
+    createdByUserId: uuid("created_by_user_id").notNull(),
+    updatedByUserId: uuid("updated_by_user_id"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+    checkedInAt: timestamp("checked_in_at", { withTimezone: true }),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    noShowAt: timestamp("no_show_at", { withTimezone: true }),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    cancelledByUserId: uuid("cancelled_by_user_id"),
+    cancellationReason: text("cancellation_reason"),
+  },
+  (t) => [
+    foreignKey({
+      name: "appointments_branch_fk",
+      columns: [t.tenantId, t.branchId],
+      foreignColumns: [branches.tenantId, branches.id],
+    }),
+    foreignKey({
+      name: "appointments_patient_fk",
+      columns: [t.tenantId, t.patientId],
+      foreignColumns: [patients.tenantId, patients.id],
+    }),
+    foreignKey({
+      name: "appointments_doctor_fk",
+      columns: [t.tenantId, t.doctorId],
+      foreignColumns: [doctorProfiles.tenantId, doctorProfiles.id],
+    }),
+    /** Oda aynı kiracı + AYNI şubeye ait olmak zorunda. */
+    foreignKey({
+      name: "appointments_room_fk",
+      columns: [t.tenantId, t.branchId, t.roomId],
+      foreignColumns: [rooms.tenantId, rooms.branchId, rooms.id],
+    }),
+    foreignKey({
+      name: "appointments_service_fk",
+      columns: [t.tenantId, t.serviceId],
+      foreignColumns: [clinicalServices.tenantId, clinicalServices.id],
+    }),
+    unique("appointments_tenant_id_uq").on(t.tenantId, t.id),
+    check("appointments_time_ck", sql`${t.scheduledStart} < ${t.scheduledEnd}`),
+    check(
+      "appointments_duration_ck",
+      sql`${t.durationMinutes} between 5 and 480 and extract(epoch from (${t.scheduledEnd} - ${t.scheduledStart})) = ${t.durationMinutes} * 60`,
+    ),
+    index("appointments_branch_start_idx").on(t.tenantId, t.branchId, t.scheduledStart),
+    index("appointments_doctor_start_idx").on(t.tenantId, t.doctorId, t.scheduledStart),
+    index("appointments_patient_start_idx").on(t.tenantId, t.patientId, t.scheduledStart),
+    index("appointments_room_start_idx").on(t.tenantId, t.roomId, t.scheduledStart),
+  ],
+);
+
+/** Randevu geçmişi — yalnızca ekleme. metadata_safe yalnızca kimlik / zaman / kısa kod (hasta içeriği YOK). */
+export const appointmentEvents = kliniva.table(
+  "appointment_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    appointmentId: uuid("appointment_id").notNull(),
+    type: appointmentEventType("type").notNull(),
+    fromStatus: appointmentStatus("from_status"),
+    toStatus: appointmentStatus("to_status"),
+    actorUserId: uuid("actor_user_id"),
+    source: appointmentSource("source").notNull().default("STAFF"),
+    metadataSafe: jsonb("metadata_safe")
+      .$type<Record<string, string | number | boolean | null>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: "appointment_events_appointment_fk",
+      columns: [t.tenantId, t.appointmentId],
+      foreignColumns: [appointments.tenantId, appointments.id],
+    }),
+    index("appointment_events_appointment_idx").on(t.tenantId, t.appointmentId, t.createdAt),
   ],
 );

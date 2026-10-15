@@ -3,7 +3,8 @@
  *   1. RBAC kataloğu (yetkiler + sistem rolleri)
  *   2. Demo klinik + merkez şube + oda
  *   3. Klinik sahibi kullanıcı (SEED_OWNER_EMAIL / SEED_OWNER_PASSWORD — .env.local, `npm run env:init`)
- *   4. KVKK aydınlatma metni v1 ve açık rıza beyanı v1 (yayımlanmış)
+ *   4. KVKK aydınlatma metni ve açık rıza beyanı (yayımlanmış)
+ *   5. Demo hizmetler + demo doktor (her gün 08:00–20:00) — randevu akışı için
  * Parola ve diğer sırlar ekrana yazdırılmaz.
  */
 import { loadEnvConfig } from "@next/env";
@@ -160,6 +161,123 @@ async function main() {
         .values({ ...t, tenantId, version, active: true, publishedAt: new Date() });
       console.log(`✓ Şablon yayımlandı: ${t.type} v${version}`);
     }
+
+    // Sprint 3 — demo hizmetler + demo doktor (randevu akışını denemek için). Parolası rastgele ve hiçbir yere
+    // yazılmaz (bu hesapla giriş yapılmaz; yalnızca takvim/uygunluk verisi için). Her adım idempotenttir.
+    const demoServices = [
+      {
+        name: "Muayene",
+        code: "MUA",
+        defaultDurationMinutes: 30,
+        requiresRoom: true,
+        allowedRoomTypes: ["EXAMINATION" as const],
+      },
+      {
+        name: "PRP",
+        code: "PRP",
+        defaultDurationMinutes: 45,
+        requiresRoom: true,
+        allowedRoomTypes: ["PROCEDURE" as const],
+      },
+      {
+        name: "Lazer",
+        code: "LZR",
+        defaultDurationMinutes: 60,
+        requiresRoom: true,
+        allowedRoomTypes: ["LASER" as const],
+      },
+      {
+        name: "Danışma",
+        code: "DAN",
+        defaultDurationMinutes: 30,
+        requiresRoom: false,
+        allowedRoomTypes: null,
+      },
+    ];
+    for (const s of demoServices) {
+      const [found] = await tx
+        .select({ id: schema.clinicalServices.id })
+        .from(schema.clinicalServices)
+        .where(and(eq(schema.clinicalServices.tenantId, tenantId), eq(schema.clinicalServices.name, s.name)));
+      if (!found) {
+        await tx.insert(schema.clinicalServices).values({ ...s, tenantId });
+        console.log(`✓ Hizmet eklendi: ${s.name}`);
+      }
+    }
+    const doctorEmail = normalizeEmail(`doktor@${slug}.demo`);
+    let [docUser] = await tx
+      .select({ id: schema.users.id })
+      .from(schema.users)
+      .where(and(eq(schema.users.tenantId, tenantId), eq(schema.users.emailNormalized, doctorEmail)));
+    if (!docUser) {
+      const { randomBytes } = await import("node:crypto");
+      [docUser] = await tx
+        .insert(schema.users)
+        .values({
+          tenantId,
+          email: doctorEmail,
+          emailNormalized: doctorEmail,
+          passwordHash: await hashPassword(`${randomBytes(24).toString("base64url")}-Aa1!`),
+          firstName: "Demo",
+          lastName: "Doktor",
+        })
+        .returning({ id: schema.users.id });
+      const [doctorRole] = await tx
+        .select({ id: schema.roles.id })
+        .from(schema.roles)
+        .where(and(isNull(schema.roles.tenantId), eq(schema.roles.key, "DOCTOR")));
+      await tx
+        .insert(schema.userRoles)
+        .values({ tenantId, userId: docUser!.id, roleId: doctorRole!.id, branchId: null });
+      console.log("✓ Demo doktor kullanıcısı oluşturuldu (giriş için kullanılmaz)");
+    }
+    let [docProfile] = await tx
+      .select({ id: schema.doctorProfiles.id })
+      .from(schema.doctorProfiles)
+      .where(
+        and(eq(schema.doctorProfiles.tenantId, tenantId), eq(schema.doctorProfiles.userId, docUser!.id)),
+      );
+    if (!docProfile) {
+      [docProfile] = await tx
+        .insert(schema.doctorProfiles)
+        .values({ tenantId, userId: docUser!.id, title: "Dr.", specialty: "Genel" })
+        .returning({ id: schema.doctorProfiles.id });
+    }
+    const [link] = await tx
+      .select({ id: schema.doctorBranches.id })
+      .from(schema.doctorBranches)
+      .where(
+        and(
+          eq(schema.doctorBranches.doctorId, docProfile!.id),
+          eq(schema.doctorBranches.branchId, branch!.id),
+        ),
+      );
+    if (!link) {
+      await tx
+        .insert(schema.doctorBranches)
+        .values({ tenantId, doctorId: docProfile!.id, branchId: branch!.id });
+      for (let day = 1; day <= 7; day++) {
+        await tx.insert(schema.doctorWorkingHours).values({
+          tenantId,
+          doctorId: docProfile!.id,
+          branchId: branch!.id,
+          dayOfWeek: day,
+          startTime: "08:00",
+          endTime: "20:00",
+        });
+      }
+      console.log("✓ Demo doktor şubeye atandı (her gün 08:00–20:00)");
+    }
+    const services = await tx
+      .select({ id: schema.clinicalServices.id })
+      .from(schema.clinicalServices)
+      .where(eq(schema.clinicalServices.tenantId, tenantId));
+    for (const s of services) {
+      await tx
+        .insert(schema.doctorServices)
+        .values({ tenantId, doctorId: docProfile!.id, serviceId: s.id })
+        .onConflictDoNothing();
+    }
   });
 
   // İdempotans özeti: iki kez çalıştırıldığında sayılar değişmemelidir.
@@ -175,6 +293,9 @@ async function main() {
              (select count(*)::int from kliniva.users) as users,
              (select count(*)::int from kliniva.user_roles) as user_roles,
              (select count(*)::int from kliniva.document_templates where tenant_id is not null) as templates,
+             (select count(*)::int from kliniva.clinical_services) as services,
+             (select count(*)::int from kliniva.doctor_profiles) as doctors,
+             (select count(*)::int from kliniva.doctor_services) as doctor_services,
              (select count(*)::int from kliniva.user_roles ur join kliniva.roles r on r.id = ur.role_id
                 where r.key = 'PLATFORM_SUPER_ADMIN') as super_admin_in_tenant`);
     return r.rows[0]!;
