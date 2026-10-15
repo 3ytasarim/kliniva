@@ -21,6 +21,7 @@ import {
 } from "@/server/db/schema";
 import { AppError } from "@/server/errors";
 import { writeAudit } from "@/server/audit/audit";
+import { enqueueOutbox } from "@/server/notifications/outbox";
 import {
   actorOf,
   canAccessBranch,
@@ -737,15 +738,22 @@ async function recordIntegrityFailure(
   part: string,
 ) {
   // Ayrı transaction: hata fırlatılsa bile audit kaydı kalıcı olur. PDF baytları audit'e YAZILMAZ.
-  await tenantQuery(ctx, (scope) =>
-    writeAudit(scope, actorOf(ctx), {
+  await tenantQuery(ctx, async (scope) => {
+    await writeAudit(scope, actorOf(ctx), {
       action: "PATIENT_DOCUMENT_INTEGRITY_FAILED",
       entityType: "patient_document",
       entityId: doc.id,
       branchId: doc.branchId,
       metadata: { documentId: doc.id, documentVersion: doc.documentVersion, part },
-    }),
-  );
+    });
+    // Sahip / yönetici uyarısı (aynı transaction). Belge içeriği / hasta adı outbox yüküne YAZILMAZ.
+    await enqueueOutbox(scope, {
+      eventType: "DOCUMENT_INTEGRITY_FAILED",
+      aggregateType: "patient_document",
+      aggregateId: doc.id,
+      payload: { documentId: doc.id, branchId: doc.branchId, part },
+    });
+  });
 }
 
 /**

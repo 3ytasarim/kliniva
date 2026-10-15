@@ -1,6 +1,14 @@
 /** Randevu ekranlarında istemci ve sunucunun paylaştığı tipler (çalışma zamanı kodu yok). */
 export type AppointmentStatus =
-  "DRAFT" | "BOOKED" | "CONFIRMED" | "CHECKED_IN" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED" | "NO_SHOW";
+  | "DRAFT"
+  | "BOOKED"
+  | "CONFIRMED"
+  | "CHECKED_IN"
+  | "IN_PROGRESS"
+  | "COMPLETED"
+  | "CANCELLED"
+  | "NO_SHOW"
+  | "PENDING_APPROVAL";
 
 export type SlotReason =
   | "OK"

@@ -87,6 +87,18 @@ export default async function ClinicSettingsPage() {
             defaultValue={p.expiryWarningDays}
             hint="Son kullanma tarihine bu kadar gün kalan lotlar 'yaklaşan' olarak gösterilir."
           />
+          <SelectField
+            label="Randevu onay modu"
+            name="appointmentApprovalMode"
+            defaultValue={p.appointmentApprovalMode}
+            options={[
+              { value: "AUTO_ACCEPT", label: "Otomatik kabul (randevu doğrudan planlanır)" },
+              {
+                value: "DOCTOR_APPROVAL",
+                label: "Doktor onayı (randevu onaylanana kadar bekler, slot tutulur)",
+              },
+            ]}
+          />
           <input type="hidden" name="country" value={p.country} />
         </ActionForm>
       </div>

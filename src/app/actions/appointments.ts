@@ -13,6 +13,8 @@ import {
   updateClinicalService,
 } from "@/server/services/clinical-services";
 import {
+  approveAppointment,
+  declineAppointment,
   cancelAppointment,
   createAppointment,
   getAvailableSlots,
@@ -118,7 +120,31 @@ export async function appointmentStatusAction(_p: ActionState, form: FormData): 
     revalidatePath(`/appointments/${id}`);
     revalidatePath("/doctor");
     revalidatePath("/dashboard");
+    revalidatePath("/operations/today");
     return "Randevu durumu güncellendi.";
+  });
+}
+
+/** Doktor onayı — yalnızca KENDİ onay bekleyen randevusu (servis doktor eşleşmesini zorunlu tutar). */
+export async function approveAppointmentAction(_p: ActionState, form: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const { id } = formToObject(form);
+    await approveAppointment(await requireUser(), id);
+    revalidatePath(`/appointments/${id}`);
+    revalidatePath("/doctor");
+    revalidatePath("/appointments");
+    return "Randevu onaylandı.";
+  });
+}
+
+export async function declineAppointmentAction(_p: ActionState, form: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const { id } = formToObject(form);
+    await declineAppointment(await requireUser(), id);
+    revalidatePath(`/appointments/${id}`);
+    revalidatePath("/doctor");
+    revalidatePath("/appointments");
+    return "Randevu reddedildi; slot yeniden müsait.";
   });
 }
 

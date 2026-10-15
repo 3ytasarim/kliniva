@@ -95,11 +95,14 @@ export const APPOINTMENT_STATUSES = [
   "COMPLETED",
   "CANCELLED",
   "NO_SHOW",
+  "PENDING_APPROVAL",
 ] as const;
 export type AppointmentStatus = (typeof APPOINTMENT_STATUSES)[number];
 
 /** Slot tutan (çakışma kontrolüne giren) statüler — exclusion constraint WHERE koşuluyla aynı. */
 export const ACTIVE_STATUSES: AppointmentStatus[] = [
+  // Doktor onayı bekleyen randevu da slotu tutar (reddedilince CANCELLED → slot boşalır).
+  "PENDING_APPROVAL",
   "BOOKED",
   "CONFIRMED",
   "CHECKED_IN",
@@ -116,9 +119,12 @@ const TRANSITIONS: Record<AppointmentStatus, AppointmentStatus[]> = {
   COMPLETED: [],
   CANCELLED: [],
   NO_SHOW: [],
+  // Doktor onayı: kabul → BOOKED, ret (veya resepsiyon iptali) → CANCELLED.
+  PENDING_APPROVAL: ["BOOKED", "CANCELLED"],
 };
 
 export const canTransition = (from: AppointmentStatus, to: AppointmentStatus) =>
   TRANSITIONS[from].includes(to);
 export const nextStatuses = (from: AppointmentStatus) => TRANSITIONS[from];
-export const isReschedulable = (s: AppointmentStatus) => s === "DRAFT" || s === "BOOKED" || s === "CONFIRMED";
+export const isReschedulable = (s: AppointmentStatus) =>
+  s === "DRAFT" || s === "BOOKED" || s === "CONFIRMED" || s === "PENDING_APPROVAL";

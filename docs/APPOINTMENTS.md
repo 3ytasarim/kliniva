@@ -46,7 +46,7 @@ ataması çakışma kontrolünde).
    transaction'ında hesaplanır; yazma transaction'ı tek sorguluk son kontrol + INSERT/UPDATE yapar (anlamlı hata
    kodu). Uygulama düzeyinde kilit kullanılmaz: eşzamanlı yarışı exclusion constraint veritabanında, bekleyen istemci
    gidiş-dönüşü olmadan çözer (`23P01` → çakışma kodu). Böylece 40 eşzamanlı istekte bağlantı havuzu tükenmez.
-2. **Veritabanı:** aktif statülerde (`BOOKED, CONFIRMED, CHECKED_IN, IN_PROGRESS, COMPLETED`) üç exclusion
+2. **Veritabanı:** aktif statülerde (`PENDING_APPROVAL, BOOKED, CONFIRMED, CHECKED_IN, IN_PROGRESS, COMPLETED`) üç exclusion
    constraint — aynı doktor, aynı oda, aynı hasta için `tstzrange(start, end, '[)')` örtüşmesi imkânsız.
    Bitişik randevular (`09:00–10:00` / `10:00–11:00`) çakışmaz. `CANCELLED`, `NO_SHOW`, `DRAFT` slot tutmaz.
 
@@ -58,6 +58,7 @@ Hata kodları: `APPOINTMENT_CONFLICT` (doktor), `ROOM_APPOINTMENT_CONFLICT`, `PA
 
 ```
 DRAFT → BOOKED | CANCELLED
+PENDING_APPROVAL → BOOKED (doktor onayı) | CANCELLED (ret / iptal)
 BOOKED → CONFIRMED | CHECKED_IN | CANCELLED | NO_SHOW
 CONFIRMED → CHECKED_IN | CANCELLED | NO_SHOW
 CHECKED_IN → IN_PROGRESS | CANCELLED
@@ -66,7 +67,7 @@ COMPLETED, CANCELLED, NO_SHOW → (son; hiçbir alan değişmez)
 ```
 
 Servis (`updateAppointmentStatus`, `cancelAppointment`) ve DB tetikleyicisi (`appointments_guard`) aynı tabloyu
-uygular. Ek kurallar: zaman / doktor / oda / şube / hizmet yalnızca `DRAFT/BOOKED/CONFIRMED` iken ve durum
+uygular. Ek kurallar: zaman / doktor / oda / şube / hizmet yalnızca `DRAFT/PENDING_APPROVAL/BOOKED/CONFIRMED` iken ve durum
 değişmeden değişebilir; `NO_SHOW` randevu saati gelmeden işaretlenemez; iptal gerekçesi (yapılandırmaya göre)
 zorunlu; fiziksel silme yok (yalnızca yasal imha). `appointment_events` yalnızca eklenir.
 
@@ -101,7 +102,10 @@ Zod şemaları. Servisler HTTP/AI bağımsızdır; yapay zekâ ileride yalnızca
 çağıracak (veritabanına doğrudan erişim yok). Bu sprintte ses / AI bağlantısı **yoktur**; `source = AI_VOICE`
 henüz kabul edilmez.
 
-## Bildirim
+## Bildirim ve onay modu (Sprint 6)
 
-SMS / WhatsApp gönderimi bu sprintte yoktur; `appointment_events` ve servis API'si ileride bildirim için temel
-oluşturur.
+Randevu olayları (oluşturma, taşıma, onay, giriş, iptal, doktor onayı / reddi) aynı transaction içinde outbox'a
+yazılır ve uygulama içi bildirime dönüşür (doktor / ilgili operasyon kullanıcısı). Klinik ayarı
+`appointmentApprovalMode = DOCTOR_APPROVAL` ise yeni randevu `PENDING_APPROVAL` olarak oluşur ve slotu tutar; doktor
+yalnızca kendi randevusunu onaylar / reddeder. SMS / WhatsApp / e-posta gönderimi henüz yoktur. Ayrıntı:
+`docs/NOTIFICATIONS.md`.

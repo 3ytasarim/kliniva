@@ -44,6 +44,17 @@ async function main() {
       );
     const itemCond = items.length ? sql`inventory_item_id in (${uuidList(items)})` : sql`false`;
     const patientCond = ids.length ? sql`patient_id in (${uuidList(ids)})` : sql`false`;
+    // Sprint 6: E2E randevu / ürün / lotlarına ait bildirimler ve outbox olayları (iş kayıtlarıyla birlikte imha).
+    const refs = sql`(
+      ${items.length ? sql`id_ref in (${uuidList(items)})` : sql`false`}
+      or id_ref in (select id from kliniva.stock_lots where tenant_id = ${t.id} and ${itemCond})
+      or id_ref in (select id from kliniva.appointments where tenant_id = ${t.id} and ${patientCond}))`;
+    await tx.execute(
+      sql`delete from kliniva.notifications n where n.tenant_id = ${t.id} and exists (select 1 from (select n.entity_id as id_ref) x where ${refs})`,
+    );
+    await tx.execute(
+      sql`delete from kliniva.outbox_events o where o.tenant_id = ${t.id} and exists (select 1 from (select o.aggregate_id as id_ref) x where ${refs})`,
+    );
     await tx.execute(sql`delete from kliniva.patient_material_usage_allocations where tenant_id = ${t.id} and (${itemCond}
       or patient_usage_item_id in (select i.id from kliniva.patient_material_usage_items i
         where i.tenant_id = ${t.id} and i.patient_usage_id in

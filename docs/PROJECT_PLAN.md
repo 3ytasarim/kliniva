@@ -56,7 +56,13 @@ seçim, SKT anlamı (şube yerel günü sonuna kadar), kullanılabilir vs fiziks
 çağırma (geri alınamaz), imha, fiziksel sayım, SKT raporu ve panel kartları, eşzamanlılık + DB havuzu yük testi.
 Ayrıntı: `docs/INVENTORY.md`.
 
-## Sprint 6+ (öneri)
+## Sprint 6 — Bildirim merkezi, outbox, gerçek zamanlı operasyon, doktor onayı ✅
+
+Uygulama içi bildirimler (zil + sayfa + tercihler), transactional outbox (SKIP LOCKED, tekilleştirme, yeniden deneme,
+başarısız olay ekranı), SSE gerçek zamanlı akış, Bugünkü operasyon ekranı, doktor onay modu (PENDING_APPROVAL slot
+tutar), stok eşik / SKT / geri çağırma / belge bütünlüğü uyarıları. Ayrıntı: `docs/NOTIFICATIONS.md`.
+
+## Sprint 7+ (öneri)
 
 Voice AI (yetki kontrollü araçlar, `source = AI_VOICE`), raporlama, KVKK m.11 bilgi talebi
 dışa aktarımı ve düzeltme akışı, MFA zorunluluğu, orphan depo nesnesi temizliği.

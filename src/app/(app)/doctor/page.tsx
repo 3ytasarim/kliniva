@@ -3,14 +3,19 @@ import { requireUser } from "@/server/auth/guards";
 import { hasPermission } from "@/server/auth/authz";
 import { isAppError } from "@/server/errors";
 import { getMyDoctorOverview } from "@/server/services/schedule";
-import { getTodayAppointments } from "@/server/services/appointments";
-import { appointmentStatusAction } from "@/app/actions/appointments";
+import { getTodayAppointments, listMyPendingApprovals } from "@/server/services/appointments";
+import {
+  appointmentStatusAction,
+  approveAppointmentAction,
+  declineAppointmentAction,
+} from "@/app/actions/appointments";
 import { InlineAction } from "@/components/action-form";
 import { AppointmentStatusBadge } from "@/components/appointment-ui";
 import Link from "next/link";
 import { Forbidden } from "@/components/forbidden";
 import { EmptyState, PageHeader } from "@/components/ui";
 import { dayName, isoDayOfWeek } from "@/lib/time";
+import { LiveRefresh } from "@/components/notification-bell";
 
 export const metadata: Metadata = { title: "Planım" };
 
@@ -45,13 +50,77 @@ export default async function DoctorPortalPage() {
   const appts = canSeeAppointments
     ? (await getTodayAppointments(ctx)).items.filter((a) => a.doctor.id === doctor.id)
     : [];
+  // Onay bekleyen randevular — yalnızca KENDİ kaydı (servis doktor eşleşmesini zorunlu tutar).
+  const pending = hasPermission(ctx, "appointment.approve_own") ? await listMyPendingApprovals(ctx) : [];
 
   return (
     <section className="grid gap-6">
+      <LiveRefresh />
       <PageHeader
         title={`Merhaba, ${doctor.displayName}`}
         description={`${dayName(isoDayOfWeek(today))}, ${today} · ${doctor.specialty}`}
       />
+
+      {pending.length ? (
+        <div className="card overflow-x-auto p-0" id="onay-bekleyen">
+          <h2 className="px-5 pt-5 font-semibold">Onay Bekleyen Randevular</h2>
+          <p className="hint px-5">
+            Onay verene kadar slot sizin için tutulur; reddettiğinizde yeniden müsait olur.
+          </p>
+          <table className="table mt-3">
+            <thead>
+              <tr>
+                <th scope="col">Tarih</th>
+                <th scope="col">Saat</th>
+                <th scope="col">Hizmet</th>
+                <th scope="col">Şube</th>
+                <th scope="col">Hasta</th>
+                <th scope="col">
+                  <span className="sr-only">İşlem</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {pending.map((a) => (
+                <tr key={a.id} data-testid="pending-approval">
+                  <td className="whitespace-nowrap">{a.localDate.split("-").reverse().join(".")}</td>
+                  <td className="whitespace-nowrap font-medium tabular-nums">
+                    {a.localStart}–{a.localEnd}
+                  </td>
+                  <td>{a.service?.name ?? "—"}</td>
+                  <td>{a.branch.name}</td>
+                  <td>
+                    <Link href={`/appointments/${a.id}`} className="hover:text-brand-700">
+                      {a.patient.name}
+                    </Link>
+                  </td>
+                  <td className="whitespace-nowrap text-right">
+                    <div className="inline-flex flex-wrap justify-end gap-2">
+                      {hasPermission(ctx, "appointment.approve_own") ? (
+                        <InlineAction
+                          action={approveAppointmentAction}
+                          fields={{ id: a.id }}
+                          label="Onayla"
+                          variant="primary"
+                        />
+                      ) : null}
+                      {hasPermission(ctx, "appointment.decline_own") ? (
+                        <InlineAction
+                          action={declineAppointmentAction}
+                          fields={{ id: a.id }}
+                          label="Reddet"
+                          variant="danger"
+                          confirm="Randevu reddedilsin mi? Slot yeniden müsait olacak."
+                        />
+                      ) : null}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
 
       {canSeeAppointments ? (
         <div className="card overflow-x-auto p-0">

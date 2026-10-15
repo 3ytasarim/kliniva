@@ -31,6 +31,18 @@ export function watch(page: Page) {
 
 /** Global setup'ın oturum dosyası (gitignore; çalışma sonunda silinir). */
 export const AUTH_FILE = path.join(".playwright-auth", "owner.json");
+export const AUTH_FILE_RECEPTION = path.join(".playwright-auth", "reception.json");
+export const AUTH_FILE_DOCTOR = path.join(".playwright-auth", "doctor.json");
+
+/** Belirli rolün tek seferlik global giriş çerezleriyle oturum açar (Sprint 6: resepsiyon / doktor bağlamları). */
+export async function loginAs(page: Page, who: "owner" | "reception" | "doctor", landing = "/dashboard") {
+  const file = who === "owner" ? AUTH_FILE : who === "reception" ? AUTH_FILE_RECEPTION : AUTH_FILE_DOCTOR;
+  const state = JSON.parse(readFileSync(file, "utf8")) as {
+    cookies: Parameters<BrowserContext["addCookies"]>[0];
+  };
+  await page.context().addCookies(state.cookies);
+  await page.goto(landing);
+}
 
 /** Tek seferlik global girişin çerezlerini kullanır — testler parola yazmaz, giriş sınırına takılmaz. */
 export async function login(page: Page) {

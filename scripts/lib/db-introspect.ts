@@ -47,6 +47,9 @@ export const EXPECTED_TABLES = [
   "stock_lots",
   "stock_movements",
   "patient_material_usage_allocations",
+  "notifications",
+  "notification_preferences",
+  "outbox_events",
 ] as const;
 
 /** RLS (ENABLE + FORCE) zorunlu tablolar: kiracı tabloları + platform/kiracı karışık tablolar. */
@@ -85,6 +88,9 @@ export const RLS_TABLES = [
   "stock_lots",
   "stock_movements",
   "patient_material_usage_allocations",
+  "notifications",
+  "notification_preferences",
+  "outbox_events",
 ] as const;
 
 /** Uygulama rolünün tablo bazında OLMASI GEREKEN yetkiler (fazlası da eksiği de hata). */
@@ -134,6 +140,10 @@ export const APP_PRIVILEGES: Record<string, string[]> = {
   patient_material_usage_items: ["DELETE", "INSERT", "SELECT", "UPDATE"],
   service_material_templates: ["DELETE", "INSERT", "SELECT", "UPDATE"],
   patient_material_usage_allocations: ["DELETE", "INSERT", "SELECT", "UPDATE"],
+  // Sprint 6: tablo düzeyi UPDATE yok — yalnızca durum / zaman sütunları (aşağıda); DELETE yok
+  notifications: ["INSERT", "SELECT"],
+  notification_preferences: ["INSERT", "SELECT"],
+  outbox_events: ["INSERT", "SELECT"],
 };
 
 export function isPoolerUrl(url: string | undefined): boolean | null {
@@ -332,6 +342,26 @@ export async function checkAppRole(c: ClientBase, role = APP_ROLE): Promise<AppR
     if (!lc.rec) mismatches.push("stock_lots.recalled_at: UPDATE yok");
   }
   if (seqUpd.rows[0]?.name) mismatches.push("tenants.name: gereksiz UPDATE");
+  // Bildirim içeriği / outbox yükü uygulama rolünce değiştirilemez: yalnızca durum sütunları güncellenebilir.
+  const s6 = await c
+    .query(
+      `select to_regclass('kliniva.notifications') is not null as e,
+              has_column_privilege($1, 'kliniva.notifications', 'status', 'UPDATE') as n_status,
+              has_column_privilege($1, 'kliniva.notifications', 'title', 'UPDATE') as n_title,
+              has_column_privilege($1, 'kliniva.notifications', 'recipient_user_id', 'UPDATE') as n_recipient,
+              has_column_privilege($1, 'kliniva.outbox_events', 'status', 'UPDATE') as o_status,
+              has_column_privilege($1, 'kliniva.outbox_events', 'payload_safe', 'UPDATE') as o_payload`,
+      [role],
+    )
+    .catch(() => ({ rows: [{ e: false }] as Record<string, boolean>[] }));
+  const n6 = s6.rows[0];
+  if (n6?.e) {
+    if (!n6.n_status) mismatches.push("notifications.status: UPDATE yok");
+    if (n6.n_title) mismatches.push("notifications.title: gereksiz UPDATE");
+    if (n6.n_recipient) mismatches.push("notifications.recipient_user_id: gereksiz UPDATE");
+    if (!n6.o_status) mismatches.push("outbox_events.status: UPDATE yok");
+    if (n6.o_payload) mismatches.push("outbox_events.payload_safe: gereksiz UPDATE");
+  }
   return {
     exists: true,
     canLogin: a.rolcanlogin,

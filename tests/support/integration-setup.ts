@@ -13,3 +13,5 @@ process.env.APP_ENCRYPTION_KEY = randomBytes(32).toString("base64");
 process.env.APP_ORIGIN = "http://localhost:3000";
 process.env.LOG_LEVEL = "error";
 process.env.DB_POOL_MAX = "3";
+// Outbox: testler işlemciyi AÇIKÇA çağırır (commit sonrası arka plan işleme kapalı → deterministik sonuç).
+process.env.OUTBOX_AUTOPROCESS = "off";

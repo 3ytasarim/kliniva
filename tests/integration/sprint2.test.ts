@@ -28,6 +28,8 @@ import {
   verifyPatientDocumentIntegrity,
   voidPatientDocument,
 } from "@/server/services/documents";
+import { processOutboxBatch } from "@/server/notifications/outbox";
+import { listNotifications } from "@/server/services/notifications";
 import { GET as fileRoute } from "@/app/api/v1/patients/[id]/documents/[docId]/file/route";
 import { GET as listRoute } from "@/app/api/v1/patients/route";
 import {
@@ -333,6 +335,19 @@ describe("KVKK belgesi, PDF ve dosya uç noktası", () => {
     );
     expect(fails.length).toBeGreaterThanOrEqual(2);
     expect(JSON.stringify(fails)).not.toContain("%PDF");
+    // Sprint 6: aynı transaction içinde outbox olayı → sahip / yöneticiye bildirim (içerik / hasta adı yok).
+    const events = await runInTenant(A.id, (s) =>
+      s.tx.execute<{ payload: unknown }>(
+        sql`select payload_safe as payload from kliniva.outbox_events where aggregate_id = ${id} and event_type = 'DOCUMENT_INTEGRITY_FAILED'`,
+      ),
+    );
+    expect(events.rows.length).toBeGreaterThanOrEqual(1);
+    expect(JSON.stringify(events.rows)).not.toMatch(/%PDF|Hasta|Test/);
+    await processOutboxBatch({ tenantIds: [A.id] });
+    const owners = await listNotifications(A.users.owner!.ctx, { filter: "security" });
+    const alert = owners.items.find((n) => n.type === "DOCUMENT_INTEGRITY_FAILED");
+    expect(alert?.body).toBe("Bir hasta belgesinde bütünlük kontrolü başarısız oldu.");
+    expect((await listNotifications(A.users.reception!.ctx, { filter: "security" })).items).toEqual([]);
   });
 
   it("şifreli nesnenin baytları bozulursa (GCM) da bütünlük ihlali — 'yok' sayılmaz", async () => {

@@ -111,6 +111,12 @@ export function Icon({ name, className = "size-5" }: { name: IconName; className
     users: <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm0 2c-4 0-8 2-8 5v2h16v-2c0-3-4-5-8-5Z" />,
     shield: <path d="M12 2 4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5l-8-3Z" />,
     logout: <path d="M10 17v-3H3v-4h7V7l5 5-5 5Zm9 4h-6v-2h6V5h-6V3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2Z" />,
+    bell: (
+      <path d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z" />
+    ),
+    operations: (
+      <path d="M9 2h6a1 1 0 0 1 1 1v1h3a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3V3a1 1 0 0 1 1-1Zm1 2v2h4V4h-4Zm-3 7v2h2v-2H7Zm4 0v2h6v-2h-6Zm-4 5v2h2v-2H7Zm4 0v2h6v-2h-6Z" />
+    ),
   };
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className={className}>
@@ -131,4 +137,6 @@ export type IconName =
   | "settings"
   | "users"
   | "shield"
-  | "logout";
+  | "logout"
+  | "bell"
+  | "operations";

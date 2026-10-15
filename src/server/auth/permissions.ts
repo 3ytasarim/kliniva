@@ -69,6 +69,12 @@ export const PERMISSIONS = {
   "inventory.expiry.read": "SKT yaklaşan / geçmiş stok raporu",
   "inventory.write_off": "Fire / imha (SKT geçmiş stok dahil)",
   "inventory.physical_count": "Fiziksel sayım ve sayım farkı düzeltmesi",
+  // Sprint 6 — bildirimler / onay
+  "notification.read_own": "Kendi bildirimlerini görüntüleme / okundu işaretleme",
+  "notification.preference.manage_own": "Kendi bildirim tercihlerini yönetme",
+  "notification.admin.read_failed_events": "Başarısız sistem olaylarını (outbox) görüntüleme",
+  "appointment.approve_own": "Kendi onay bekleyen randevusunu onaylama",
+  "appointment.decline_own": "Kendi onay bekleyen randevusunu reddetme",
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;
@@ -174,7 +180,15 @@ const ADMIN_BASE: Permission[] = [
   "inventory.lot.correct_metadata",
   "inventory.lot.recall",
   "inventory.lot.trace",
+  "notification.admin.read_failed_events",
+  // Yalnızca kullanıcının KENDİ doktor kaydının randevusunda anlamlı (servis doktor eşleşmesini zorunlu tutar) —
+  // yöneticiye başka doktor adına onay yetkisi VERMEZ; DOCTOR ⊆ CLINIC_OWNER kuralı için burada da bulunur.
+  "appointment.approve_own",
+  "appointment.decline_own",
 ];
+
+/** Her kullanıcı yalnızca KENDİ bildirimlerini görür / tercihlerini yönetir (alıcı kapsamı servis katmanında). */
+const NOTIFY_OWN: Permission[] = ["notification.read_own", "notification.preference.manage_own"];
 
 export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permission[] }> = {
   // Platform yöneticisi kiracı verisine (hasta vb.) bu rolle ERİŞEMEZ. Platform operasyonları ayrı, denetimli
@@ -233,6 +247,9 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       // Lotları kullanım sırasında görür; geri çağırma / hasta izleme YOK.
       ...INVENTORY_USAGE,
       "inventory.lot.read",
+      // Onay modu: yalnızca KENDİ randevusunu onaylar / reddeder.
+      "appointment.approve_own",
+      "appointment.decline_own",
     ],
   },
   ASSISTANT: {
@@ -305,3 +322,8 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
     ],
   },
 };
+
+// Bildirim merkezi tüm kiracı rollerinde (platform yöneticisi hariç — kiracı verisi görmez).
+for (const [key, role] of Object.entries(SYSTEM_ROLES)) {
+  if (key !== "PLATFORM_SUPER_ADMIN") role.permissions.push(...NOTIFY_OWN);
+}

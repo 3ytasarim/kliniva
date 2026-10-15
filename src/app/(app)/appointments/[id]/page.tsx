@@ -8,7 +8,9 @@ import { clinicToday, getAppointment } from "@/server/services/appointments";
 import {
   appointmentNotesAction,
   appointmentStatusAction,
+  approveAppointmentAction,
   cancelAppointmentAction,
+  declineAppointmentAction,
 } from "@/app/actions/appointments";
 import { ActionForm, InlineAction } from "@/components/action-form";
 import { Forbidden } from "@/components/forbidden";
@@ -164,7 +166,31 @@ export default async function AppointmentPage({ params }: { params: Promise<{ id
         <div className="grid content-start gap-6">
           <div className="card grid gap-3">
             <h2 className="font-semibold">İşlemler</h2>
-            {statusActions.length === 0 && !a.actions.includes("CANCEL") ? (
+            {a.canDecideApproval ? (
+              <div className="grid gap-2 rounded-xl bg-amber-50 p-3 dark:bg-amber-950">
+                <p className="text-sm">
+                  Bu randevu onayınızı bekliyor. Onaylayana kadar slot sizin için tutulur.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <InlineAction
+                    action={approveAppointmentAction}
+                    fields={{ id: a.id }}
+                    label="Onayla"
+                    variant="primary"
+                  />
+                  <InlineAction
+                    action={declineAppointmentAction}
+                    fields={{ id: a.id }}
+                    label="Reddet"
+                    variant="danger"
+                    confirm="Randevu reddedilsin mi? Slot yeniden müsait olacak."
+                  />
+                </div>
+              </div>
+            ) : a.status === "PENDING_APPROVAL" ? (
+              <p className="text-sm text-amber-800 dark:text-amber-300">Doktor onayı bekleniyor.</p>
+            ) : null}
+            {statusActions.length === 0 && !a.actions.includes("CANCEL") && !a.canDecideApproval ? (
               <p className="text-sm text-slate-500">Bu randevu için yapılabilecek işlem yok.</p>
             ) : null}
             <div className="flex flex-wrap gap-2">

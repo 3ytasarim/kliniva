@@ -56,6 +56,8 @@ import {
   type LotStatus,
 } from "@/server/inventory/fefo";
 import { addDays } from "@/lib/time";
+import { emitStockAlerts, usableSnapshot } from "@/server/services/stock-alerts";
+import { enqueueOutbox } from "@/server/notifications/outbox";
 
 /**
  * Lot / SKT servisleri — HTTP / AI bağımsız. Her çağrı: yetki + kiracı (RLS) + şube kapsamı (lot lokasyonunun şubesi;
@@ -345,6 +347,10 @@ export async function recallLot(ctx: AuthContext, input: unknown): Promise<{ aff
     if (rows.some((r) => r.recalledAt !== null)) {
       throw new AppError("CONFLICT", { message: "Lot zaten geri çağrılmış (geri çağırma geri alınamaz)." });
     }
+    const before = await usableSnapshot(
+      scope,
+      rows.map((r) => ({ itemId: r.inventoryItemId, locationId: r.locationId })),
+    );
     const now = new Date();
     for (const r of rows) {
       await scope.tx
@@ -364,6 +370,23 @@ export async function recallLot(ctx: AuthContext, input: unknown): Promise<{ aff
       branchId: lot.branchId,
       metadata: { lotId: lot.id, itemId: lot.inventoryItemId, affectedLots: rows.length },
     });
+    // Bildirim: gerekçe YOK — yalnızca lot / ürün / etkilenen şube kimlikleri.
+    const branchIds = [
+      ...new Set(before.size ? [...before.values()].map((b) => b.branchId) : [lot.branchId]),
+    ];
+    await enqueueOutbox(scope, {
+      eventType: "LOT_RECALLED",
+      aggregateType: "stock_lot",
+      aggregateId: lot.id,
+      payload: {
+        lotId: lot.id,
+        itemId: lot.inventoryItemId,
+        branchIds: branchIds.join(","),
+        affectedLots: rows.length,
+      },
+      deduplicationKey: `lot-recalled:${lot.inventoryItemId}:${lot.lotNumber}`,
+    });
+    await emitStockAlerts(scope, before);
     return { affectedLots: rows.length };
   });
 }
@@ -419,6 +442,7 @@ export async function writeOffLot(
   return tenantQuery(ctx, async (scope) => {
     const lot = await loadLotInScope(scope, ctx, data.stockLotId);
     await lockStock(scope, [{ itemId: lot.inventoryItemId, locationId: lot.locationId }]);
+    const before = await usableSnapshot(scope, [{ itemId: lot.inventoryItemId, locationId: lot.locationId }]);
     const { today } = await locationToday(scope, lot.locationId);
     const [fresh] = await scope.tx
       .select()
@@ -465,6 +489,7 @@ export async function writeOffLot(
         recalled: fresh.recalledAt !== null,
       },
     });
+    await emitStockAlerts(scope, before);
     return { movementId: m!.id, remaining: fromMilli(have - qtyMilli) };
   });
 }
@@ -491,6 +516,7 @@ export async function recordPhysicalCount(ctx: AuthContext, input: unknown) {
       throw new AppError("VALIDATION", { fields: ["stockLotId"], message: "Bu ürün lot takipli değil." });
     }
     await lockStock(scope, [{ itemId: item.id, locationId: loc.id }]);
+    const before = await usableSnapshot(scope, [{ itemId: item.id, locationId: loc.id }]);
     const expectedMilli = lotId
       ? toMilli(
           (
@@ -550,6 +576,7 @@ export async function recordPhysicalCount(ctx: AuthContext, input: unknown) {
         adjusted: diff !== 0,
       },
     });
+    await emitStockAlerts(scope, before);
     return result;
   });
 }

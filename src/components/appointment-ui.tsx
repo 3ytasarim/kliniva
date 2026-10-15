@@ -34,6 +34,11 @@ export const APPOINTMENT_STATUS: Record<AppointmentStatus, { label: string; badg
     card: "border-slate-300 bg-slate-50 text-slate-500 line-through dark:bg-slate-900",
   },
   NO_SHOW: { label: "Gelmedi", badge: "badge-red", card: "border-red-400 bg-red-50 dark:bg-red-950" },
+  PENDING_APPROVAL: {
+    label: "Onay bekliyor",
+    badge: "badge-amber",
+    card: "border-dashed border-amber-500 bg-amber-50 dark:bg-amber-950",
+  },
 };
 
 export function AppointmentStatusBadge({ status }: { status: AppointmentStatus }) {
@@ -59,6 +64,8 @@ export const EVENT_LABELS: Record<string, string> = {
   CANCELLED: "İptal edildi",
   NO_SHOW: "Gelmedi olarak işaretlendi",
   NOTES_UPDATED: "Operasyon notu güncellendi",
+  APPROVED: "Doktor onayladı",
+  DECLINED: "Doktor reddetti",
 };
 
 export const SLOT_REASON_LABELS: Record<string, string> = {

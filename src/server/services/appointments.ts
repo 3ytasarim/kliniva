@@ -65,6 +65,7 @@ import {
 } from "@/lib/time";
 import type { AvailableSlot, AvailableSlotsResult, SlotReason } from "@/types/appointments";
 import { uuidSchema } from "@/server/validation";
+import { enqueueOutbox, type OutboxEventType } from "@/server/notifications/outbox";
 
 /**
  * Randevu uygulama servisleri — HTTP / server action / (ileride) Voice AI bağımsız. Her çağrı oturumdaki
@@ -118,6 +119,7 @@ type BookingConfig = {
   maxDaysAhead: number;
   cancellationReasonRequired: boolean;
   step: number;
+  approvalMode: "AUTO_ACCEPT" | "DOCTOR_APPROVAL";
 };
 
 async function bookingConfig(scope: TenantScope): Promise<BookingConfig> {
@@ -128,6 +130,7 @@ async function bookingConfig(scope: TenantScope): Promise<BookingConfig> {
       maxDays: clinicProfiles.maxBookingDaysAhead,
       cancelReq: clinicProfiles.cancellationReasonRequired,
       step: clinicProfiles.slotIntervalMinutes,
+      approvalMode: clinicProfiles.appointmentApprovalMode,
     })
     .from(clinicProfiles)
     .where(tenantWhere(clinicProfiles, scope));
@@ -137,6 +140,7 @@ async function bookingConfig(scope: TenantScope): Promise<BookingConfig> {
     maxDaysAhead: p?.maxDays ?? 365,
     cancellationReasonRequired: p?.cancelReq ?? true,
     step: p?.step ?? 15,
+    approvalMode: p?.approvalMode ?? "AUTO_ACCEPT",
   };
 }
 
@@ -187,6 +191,43 @@ export async function loadAccessibleAppointment(
   const [row] = opts.forUpdate ? await q.for("update") : await q;
   if (!row) throw new AppError("NOT_FOUND");
   return row;
+}
+
+/**
+ * Bildirim merkezi için: verilen randevulardan kullanıcının HÂLÂ görebildikleri (aynı görünürlük kuralı) + hasta adı
+ * ve yerel saat. Görünmeyen randevu sonuçta yer almaz → UI "Görüntüle" bağlantısı göstermez. Tek sorgu (N+1 yok).
+ */
+export async function visibleAppointmentSummaries(
+  scope: TenantScope,
+  ctx: AuthContext,
+  ids: string[],
+): Promise<Map<string, { patientName: string; localStart: string; localDate: string }>> {
+  const out = new Map<string, { patientName: string; localStart: string; localDate: string }>();
+  if (!ids.length) return out;
+  if (!hasPermission(ctx, "appointment.read") && !hasPermission(ctx, "appointment.read.own")) return out;
+  const rows = await scope.tx
+    .select({
+      id: appointments.id,
+      start: appointments.scheduledStart,
+      timezone: appointments.timezone,
+      first: patients.firstName,
+      last: patients.lastName,
+    })
+    .from(appointments)
+    .innerJoin(
+      patients,
+      and(eq(patients.id, appointments.patientId), eq(patients.tenantId, appointments.tenantId)),
+    )
+    .where(tenantWhere(appointments, scope, inArray(appointments.id, ids), await visibility(scope, ctx)));
+  for (const r of rows) {
+    const local = localDateTimeOf(r.start, r.timezone);
+    out.set(r.id, {
+      patientName: `${r.first} ${r.last}`,
+      localStart: formatMinutes(local.minutes),
+      localDate: local.date,
+    });
+  }
+  return out;
 }
 
 const eventSource = (ctx: AuthContext): "STAFF" | "DOCTOR" =>
@@ -242,6 +283,31 @@ async function audit(
     entityId: a.id,
     branchId: a.branchId,
     metadata: { ...apptMeta(a), ...extra },
+  });
+}
+
+/**
+ * Randevu olayını AYNI transaction içinde outbox'a yazar (iş geri alınırsa olay da yok). Yük: yalnızca kimlikler +
+ * zaman; hasta adı / telefon / not YOK — tüketici gerekli bilgiyi kendisi çözer.
+ */
+async function appointmentOutbox(
+  scope: TenantScope,
+  ctx: AuthContext,
+  eventType: OutboxEventType,
+  a: { id: string; doctorId: string; branchId: string },
+  extra: Record<string, string | null> = {},
+) {
+  await enqueueOutbox(scope, {
+    eventType,
+    aggregateType: "appointment",
+    aggregateId: a.id,
+    payload: {
+      appointmentId: a.id,
+      doctorId: a.doctorId,
+      branchId: a.branchId,
+      actorUserId: ctx.userId,
+      ...extra,
+    },
   });
 }
 
@@ -902,6 +968,11 @@ export async function createAppointment(ctx: AuthContext, input: unknown): Promi
         end: p.end,
       });
       const id = randomUUID();
+      // Onay modu: DOCTOR_APPROVAL → PENDING_APPROVAL (slot TUTAR). Doktorun kendi oluşturduğu randevu onay beklemez.
+      const cfg = await bookingConfig(scope);
+      const self = cfg.approvalMode === "DOCTOR_APPROVAL" ? await selfDoctorId(scope, ctx) : null;
+      const status: AppointmentStatus =
+        cfg.approvalMode === "DOCTOR_APPROVAL" && self !== data.doctorId ? "PENDING_APPROVAL" : "BOOKED";
       await scope.tx
         .insert(appointments)
         .values({
@@ -912,7 +983,7 @@ export async function createAppointment(ctx: AuthContext, input: unknown): Promi
           doctorId: data.doctorId,
           roomId: p.roomId,
           serviceId: p.spec.serviceId,
-          status: "BOOKED",
+          status,
           scheduledStart: p.start,
           scheduledEnd: p.end,
           timezone: p.timezone,
@@ -923,7 +994,7 @@ export async function createAppointment(ctx: AuthContext, input: unknown): Promi
         })
         .catch(mapDbError);
       await touchPatientBranch(scope, patientId, data.branchId);
-      await addEvent(scope, ctx, id, "CREATED", null, "BOOKED", {
+      await addEvent(scope, ctx, id, "CREATED", null, status, {
         start: p.start.toISOString(),
         end: p.end.toISOString(),
         roomId: p.roomId,
@@ -937,9 +1008,15 @@ export async function createAppointment(ctx: AuthContext, input: unknown): Promi
           branchId: data.branchId,
           doctorId: data.doctorId,
           serviceId: p.spec.serviceId,
-          status: "BOOKED",
+          status,
         },
         { roomId: p.roomId, start: p.start.toISOString(), hasNotes: Boolean(data.notes) },
+      );
+      await appointmentOutbox(
+        scope,
+        ctx,
+        status === "PENDING_APPROVAL" ? "APPOINTMENT_APPROVAL_REQUESTED" : "APPOINTMENT_CREATED",
+        { id, doctorId: data.doctorId, branchId: data.branchId },
       );
       return { id };
     });
@@ -1005,6 +1082,10 @@ export async function rescheduleAppointment(ctx: AuthContext, rawId: unknown, in
       };
       await addEvent(scope, ctx, a.id, "RESCHEDULED", a.status, a.status, meta);
       await audit(scope, ctx, "APPOINTMENT_RESCHEDULED", a, meta);
+      await appointmentOutbox(scope, ctx, "APPOINTMENT_RESCHEDULED", a, {
+        oldStart: meta.oldStart,
+        newStart: meta.newStart,
+      });
     });
   });
 }
@@ -1077,6 +1158,10 @@ export async function updateAppointmentStatus(
       .catch(mapDbError);
     await addEvent(scope, ctx, a.id, rule.event, a.status, data.status);
     await audit(scope, ctx, rule.audit, { ...a, status: data.status });
+    // Bildirim: onay → doktor; check-in → doktor ("hasta giriş yaptı"). Aynı geçiş ikinci kez yapılamaz
+    // (durum makinesi) + bildirim tekilleştirme → yinelenen bildirim yok.
+    if (data.status === "CHECKED_IN") await appointmentOutbox(scope, ctx, "APPOINTMENT_CHECKED_IN", a);
+    if (data.status === "CONFIRMED") await appointmentOutbox(scope, ctx, "APPOINTMENT_CONFIRMED", a);
   });
 }
 
@@ -1114,6 +1199,90 @@ export async function cancelAppointment(ctx: AuthContext, rawId: unknown, input:
       { ...a, status: "CANCELLED" },
       { reasonProvided: Boolean(data.reason) },
     );
+    // İptal gerekçesi outbox'a / bildirime YAZILMAZ.
+    await appointmentOutbox(scope, ctx, "APPOINTMENT_CANCELLED", a);
+  });
+}
+
+// ---------------------------------------------------------------- doktor onayı
+
+/**
+ * Doktor YALNIZCA KENDİ onay bekleyen randevusunu onaylar / reddeder. Başka doktorun randevusu (görünür olsa bile)
+ * NOT_FOUND. Resepsiyon bu izne sahip değildir (FORBIDDEN). Satır kilitlenir; eşzamanlı ikinci karar geçiş
+ * tablosunda reddedilir.
+ */
+async function loadOwnPending(scope: TenantScope, ctx: AuthContext, rawId: unknown) {
+  const self = await selfDoctorId(scope, ctx);
+  if (!self) throw new AppError("NOT_FOUND");
+  const id = parseId(rawId);
+  const [a] = await scope.tx
+    .select()
+    .from(appointments)
+    .where(tenantWhere(appointments, scope, eq(appointments.id, id), eq(appointments.doctorId, self)))
+    .for("update");
+  if (!a) throw new AppError("NOT_FOUND");
+  if (a.status !== "PENDING_APPROVAL") throw new AppError("INVALID_STATUS_TRANSITION");
+  return a;
+}
+
+export async function approveAppointment(ctx: AuthContext, rawId: unknown): Promise<void> {
+  requirePermission(ctx, "appointment.approve_own");
+  await tenantQuery(ctx, async (scope) => {
+    const a = await loadOwnPending(scope, ctx, rawId);
+    const now = new Date();
+    await scope.tx
+      .update(appointments)
+      .set({ status: "BOOKED", approvalExpiresAt: null, updatedByUserId: ctx.userId, updatedAt: now })
+      .where(tenantWhere(appointments, scope, eq(appointments.id, a.id)))
+      .catch(mapDbError);
+    await addEvent(scope, ctx, a.id, "APPROVED", "PENDING_APPROVAL", "BOOKED");
+    await audit(scope, ctx, "APPOINTMENT_APPROVED", { ...a, status: "BOOKED" });
+    await appointmentOutbox(scope, ctx, "APPOINTMENT_APPROVED", a);
+  });
+}
+
+/** Ret → CANCELLED: slot (exclusion constraint aktif listesi dışında kaldığı için) hemen yeniden müsait. */
+export async function declineAppointment(ctx: AuthContext, rawId: unknown): Promise<void> {
+  requirePermission(ctx, "appointment.decline_own");
+  await tenantQuery(ctx, async (scope) => {
+    const a = await loadOwnPending(scope, ctx, rawId);
+    const now = new Date();
+    await scope.tx
+      .update(appointments)
+      .set({
+        status: "CANCELLED",
+        cancelledAt: now,
+        cancelledByUserId: ctx.userId,
+        approvalExpiresAt: null,
+        updatedByUserId: ctx.userId,
+        updatedAt: now,
+      })
+      .where(tenantWhere(appointments, scope, eq(appointments.id, a.id)))
+      .catch(mapDbError);
+    await addEvent(scope, ctx, a.id, "DECLINED", "PENDING_APPROVAL", "CANCELLED");
+    await audit(scope, ctx, "APPOINTMENT_DECLINED", { ...a, status: "CANCELLED" });
+    await appointmentOutbox(scope, ctx, "APPOINTMENT_DECLINED", a);
+  });
+}
+
+/** Doktor portalı: KENDİ onay bekleyen randevuları (yakından uzağa). */
+export async function listMyPendingApprovals(ctx: AuthContext): Promise<AppointmentListItem[]> {
+  requirePermission(ctx, "appointment.approve_own");
+  return tenantQuery(ctx, async (scope) => {
+    const self = await selfDoctorId(scope, ctx);
+    if (!self) return [];
+    const rows = await baseListQuery(scope)
+      .where(
+        tenantWhere(
+          appointments,
+          scope,
+          eq(appointments.doctorId, self),
+          eq(appointments.status, "PENDING_APPROVAL"),
+        ),
+      )
+      .orderBy(asc(appointments.scheduledStart))
+      .limit(100);
+    return rows.map((r) => toListItem(r));
   });
 }
 
@@ -1291,6 +1460,8 @@ export type AppointmentDetail = AppointmentListItem & {
   cancellationReason: string | null;
   serviceId: string | null;
   actions: AppointmentAction[];
+  /** Onay bekleyen randevu + görüntüleyen bu randevunun KENDİ doktoru + onay izni. */
+  canDecideApproval: boolean;
   history: {
     id: string;
     type: string;
@@ -1342,6 +1513,10 @@ export async function getAppointment(ctx: AuthContext, rawId: unknown): Promise<
       .where(tenantWhere(appointmentEvents, scope, eq(appointmentEvents.appointmentId, a.id)))
       .orderBy(asc(appointmentEvents.createdAt));
     await audit(scope, ctx, "APPOINTMENT_VIEWED", a);
+    const canDecideApproval =
+      a.status === "PENDING_APPROVAL" &&
+      hasPermission(ctx, "appointment.approve_own") &&
+      (await selfDoctorId(scope, ctx)) === a.doctorId;
     return {
       ...toListItem(row!),
       notes: a.notesEncrypted ? decryptField(a.notesEncrypted, notesAad(scope.tenantId, a.id)) : null,
@@ -1350,6 +1525,7 @@ export async function getAppointment(ctx: AuthContext, rawId: unknown): Promise<
       cancellationReason: a.cancellationReason,
       serviceId: a.serviceId,
       actions: allowedActions(ctx, a.status, a.scheduledStart),
+      canDecideApproval,
       history: history.map((h) => ({
         id: h.id,
         type: h.type,

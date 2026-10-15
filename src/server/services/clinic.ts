@@ -46,6 +46,11 @@ export const clinicProfileSchema = z.object({
     (v) => (v === "" || v === undefined ? undefined : Number(v)),
     z.number().int().min(1).max(365).optional(),
   ),
+  /** Yeni randevu: AUTO_ACCEPT (doğrudan BOOKED) veya DOCTOR_APPROVAL (doktor onayı bekler, slot tutar). */
+  appointmentApprovalMode: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.enum(["AUTO_ACCEPT", "DOCTOR_APPROVAL"]).optional(),
+  ),
 });
 
 export type ClinicProfileView = {
@@ -61,6 +66,7 @@ export type ClinicProfileView = {
   timezone: string;
   defaultAppointmentDurationMinutes: number;
   expiryWarningDays: number;
+  appointmentApprovalMode: "AUTO_ACCEPT" | "DOCTOR_APPROVAL";
   hasLogo: boolean;
   updatedAt: Date | null;
 };
@@ -96,6 +102,7 @@ export async function getClinicProfile(ctx: AuthContext): Promise<ClinicProfileV
       timezone: "Europe/Istanbul",
       defaultAppointmentDurationMinutes: 30,
       expiryWarningDays: 30,
+      appointmentApprovalMode: "AUTO_ACCEPT",
       hasLogo: false,
       updatedAt: null,
     };
@@ -124,6 +131,7 @@ export async function upsertClinicProfile(ctx: AuthContext, input: unknown): Pro
     timezone: data.timezone ?? "Europe/Istanbul",
     defaultAppointmentDurationMinutes: data.defaultAppointmentDurationMinutes ?? 30,
     expiryWarningDays: data.expiryWarningDays ?? 30,
+    appointmentApprovalMode: data.appointmentApprovalMode ?? ("AUTO_ACCEPT" as const),
   };
   await tenantQuery(ctx, async (scope) => {
     const existing = await loadProfile(scope);

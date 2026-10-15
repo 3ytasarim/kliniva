@@ -53,6 +53,7 @@ import {
   voidInput,
 } from "@/server/inventory/contracts";
 import { lotCandidates, loadLotInScope, locationToday, usableLotSum } from "@/server/services/lot-core";
+import { emitStockAlerts, usableSnapshot } from "@/server/services/stock-alerts";
 import { fefoAllocate, fefoOrder, isExpired, type LotAllocation } from "@/server/inventory/fefo";
 
 /**
@@ -503,6 +504,10 @@ async function finalizeInScope(scope: TenantScope, ctx: AuthContext, rawId: unkn
   // 1) Tüm kalemler deterministik sırada kilitlenir, 2) HEPSİ kontrol edilir (lot tahsisi dahil), 3) ancak sonra
   //    tahsisler + hareketler yazılır. Herhangi bir hata → transaction geri alınır, HİÇBİR stok düşmez.
   await lockStock(scope, items);
+  const stockBefore = await usableSnapshot(
+    scope,
+    items.filter((i) => i.trackInventory),
+  );
   const need = new Map<string, number>();
   for (const it of items)
     need.set(
@@ -600,6 +605,7 @@ async function finalizeInScope(scope: TenantScope, ctx: AuthContext, rawId: unkn
       metadata: { patientUsageId: u.id, allocationCount, lots: lotIds.size },
     });
   }
+  await emitStockAlerts(scope, stockBefore);
   return u.id;
 }
 

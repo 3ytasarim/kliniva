@@ -48,6 +48,7 @@ import {
   usableLotSum,
   type LotRow,
 } from "@/server/services/lot-core";
+import { emitStockAlerts, usableSnapshot } from "@/server/services/stock-alerts";
 
 /**
  * Stok uygulama servisleri — HTTP / AI bağımsız. Her çağrı: yetki + kiracı (RLS) + şube kapsamı (lokasyon şubesi).
@@ -921,6 +922,7 @@ export async function adjustStock(
     const loc = await loadLocation(scope, ctx, data.locationId);
     const lot = await loadMovementLot(scope, ctx, item, loc.id, data.stockLotId, "stockLotId");
     await lockStock(scope, [{ itemId: item.id, locationId: loc.id }]);
+    const before = await usableSnapshot(scope, [{ itemId: item.id, locationId: loc.id }]);
     if (data.direction === "OUT") {
       const have = lot ? await lotMilli(scope, lot.id) : await balanceMilli(scope, item.id, loc.id);
       if (have < toMilli(data.quantity)) throw new AppError("INSUFFICIENT_STOCK");
@@ -954,6 +956,7 @@ export async function adjustStock(
       },
       { lotId: lot?.id ?? null },
     );
+    await emitStockAlerts(scope, before);
     return { movementId: m!.id, balance: fromMilli(await balanceMilli(scope, item.id, loc.id)) };
   });
 }
@@ -988,6 +991,8 @@ export async function transferStock(
       { itemId: item.id, locationId: from.id },
       { itemId: item.id, locationId: to.id },
     ]);
+    // Kaynak lokasyonda kullanılabilir stok düşer → eşik geçişi kontrolü.
+    const before = await usableSnapshot(scope, [{ itemId: item.id, locationId: from.id }]);
     let dstLot: { lot: LotRow; created: boolean } | null = null;
     if (srcLot) {
       // Kilit altında yeniden oku: geri çağırma bu işlemden hemen önce tamamlanmış olabilir.
@@ -1049,6 +1054,7 @@ export async function transferStock(
       },
       { toLocationId: to.id, toBranchId: to.branchId, crossBranch: from.branchId !== to.branchId },
     );
+    await emitStockAlerts(scope, before);
     return { movementId: m!.id, toStockLotId: dstLot?.lot.id ?? null };
   });
 }

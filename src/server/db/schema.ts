@@ -483,6 +483,12 @@ export const consentChoices = kliniva.table(
 // constraint'ler drizzle/0004_scheduling_security.sql içindedir.
 
 /** [INTERNAL] Klinik profili (kiracı başına bir). Logo özel depoda (logoStorageKey) tutulur. */
+/** Yeni randevu: doğrudan BOOKED (AUTO_ACCEPT) veya doktor onayı (DOCTOR_APPROVAL → PENDING_APPROVAL). */
+export const appointmentApprovalMode = kliniva.enum("appointment_approval_mode", [
+  "AUTO_ACCEPT",
+  "DOCTOR_APPROVAL",
+]);
+
 export const clinicProfiles = kliniva.table(
   "clinic_profiles",
   {
@@ -517,6 +523,10 @@ export const clinicProfiles = kliniva.table(
     allowNegativeStock: boolean("allow_negative_stock").notNull().default(false),
     /** "Yakında süresi dolacak" penceresi (gün). */
     expiryWarningDays: integer("expiry_warning_days").notNull().default(30),
+    /** Yeni randevu onay modu (varsayılan AUTO_ACCEPT = mevcut BOOKED davranışı). */
+    appointmentApprovalMode: appointmentApprovalMode("appointment_approval_mode")
+      .notNull()
+      .default("AUTO_ACCEPT"),
     active: boolean("active").notNull().default(true),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -827,6 +837,8 @@ export const appointmentStatus = kliniva.enum("appointment_status", [
   "COMPLETED",
   "CANCELLED",
   "NO_SHOW",
+  /** Sprint 6: doktor onayı bekleyen randevu — slot TUTAR (exclusion constraint aktif listesinde). */
+  "PENDING_APPROVAL",
 ]);
 export const appointmentSource = kliniva.enum("appointment_source", [
   "STAFF",
@@ -845,6 +857,8 @@ export const appointmentEventType = kliniva.enum("appointment_event_type", [
   "CANCELLED",
   "NO_SHOW",
   "NOTES_UPDATED",
+  "APPROVED",
+  "DECLINED",
 ]);
 
 /** [INTERNAL] Klinik hizmeti / işlem tipi (Muayene 30 dk, PRP 45 dk …). Oda tipi kısıtı isteğe bağlı. */
@@ -943,6 +957,8 @@ export const appointments = kliniva.table(
     cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
     cancelledByUserId: uuid("cancelled_by_user_id"),
     cancellationReason: text("cancellation_reason"),
+    /** Onay bekleyen randevu için ileride otomatik zaman aşımı (bu sürümde yalnızca alan). */
+    approvalExpiresAt: timestamp("approval_expires_at", { withTimezone: true }),
   },
   (t) => [
     foreignKey({
@@ -1457,5 +1473,157 @@ export const patientMaterialUsageAllocations = kliniva.table(
     unique("pmu_alloc_uq").on(t.tenantId, t.patientUsageItemId, t.stockLotId),
     check("pmu_alloc_quantity_ck", sql`${t.quantity} > 0`),
     index("pmu_alloc_lot_idx").on(t.tenantId, t.stockLotId),
+  ],
+);
+
+// ---------------------------------------------------------------- Sprint 6: bildirim merkezi + transactional outbox
+
+export const notificationType = kliniva.enum("notification_type", [
+  "APPOINTMENT_CREATED",
+  "APPOINTMENT_RESCHEDULED",
+  "APPOINTMENT_CANCELLED",
+  "APPOINTMENT_CONFIRMED",
+  "PATIENT_CHECKED_IN",
+  "APPOINTMENT_READY_FOR_DOCTOR",
+  "APPOINTMENT_APPROVAL_REQUIRED",
+  "APPOINTMENT_APPROVED",
+  "APPOINTMENT_DECLINED",
+  "LOW_STOCK",
+  "OUT_OF_STOCK",
+  "LOT_EXPIRING_SOON",
+  "LOT_EXPIRED",
+  "LOT_RECALLED",
+  "DOCUMENT_INTEGRITY_FAILED",
+  "SYSTEM_SECURITY_ALERT",
+]);
+export const notificationSeverity = kliniva.enum("notification_severity", [
+  "INFO",
+  "SUCCESS",
+  "WARNING",
+  "CRITICAL",
+]);
+export const notificationStatus = kliniva.enum("notification_status", ["UNREAD", "READ", "ARCHIVED"]);
+export const outboxStatus = kliniva.enum("outbox_status", ["PENDING", "PROCESSING", "PROCESSED", "FAILED"]);
+
+/**
+ * [INTERNAL] Uygulama içi bildirim — kiracı + ALICI kapsamlı. İçerik (başlık / gövde) hasta adı, telefon, not, belge
+ * içeriği TAŞIMAZ; yalnızca güvenli varlık referansı (entity_type + entity_id). Ayrıntı UI'da yetki kontrollü servisle
+ * çözülür. İçerik değişmez (tetikleyici); uygulama yalnızca durum / okunma / arşiv zamanını günceller.
+ */
+export const notifications = kliniva.table(
+  "notifications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    recipientUserId: uuid("recipient_user_id").notNull(),
+    branchId: uuid("branch_id"),
+    type: notificationType("type").notNull(),
+    severity: notificationSeverity("severity").notNull().default("INFO"),
+    title: text("title").notNull(),
+    bodySafe: text("body_safe"),
+    entityType: text("entity_type"),
+    entityId: uuid("entity_id"),
+    status: notificationStatus("status").notNull().default("UNREAD"),
+    deduplicationKey: text("deduplication_key"),
+    metadataSafe: jsonb("metadata_safe").$type<Record<string, string | number | boolean | null>>(),
+    createdAt: createdAt(),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+  },
+  (t) => [
+    foreignKey({
+      name: "notifications_recipient_fk",
+      columns: [t.tenantId, t.recipientUserId],
+      foreignColumns: [users.tenantId, users.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "notifications_branch_fk",
+      columns: [t.tenantId, t.branchId],
+      foreignColumns: [branches.tenantId, branches.id],
+    }),
+    unique("notifications_dedup_uq").on(t.tenantId, t.deduplicationKey),
+    check("notifications_title_ck", sql`length(${t.title}) between 1 and 160`),
+    check("notifications_body_ck", sql`${t.bodySafe} is null or length(${t.bodySafe}) <= 500`),
+    check("notifications_entity_type_ck", sql`${t.entityType} is null or ${t.entityType} ~ '^[a-z_]{1,40}$'`),
+    check(
+      "notifications_dedup_ck",
+      sql`${t.deduplicationKey} is null or length(${t.deduplicationKey}) between 1 and 200`,
+    ),
+    check(
+      "notifications_status_ck",
+      sql`(${t.status} = 'UNREAD' and ${t.readAt} is null and ${t.archivedAt} is null)
+        or (${t.status} = 'READ' and ${t.readAt} is not null and ${t.archivedAt} is null)
+        or (${t.status} = 'ARCHIVED' and ${t.archivedAt} is not null)`,
+    ),
+    index("notifications_recipient_idx").on(t.tenantId, t.recipientUserId, t.status, t.createdAt),
+    index("notifications_recipient_created_idx").on(t.tenantId, t.recipientUserId, t.createdAt),
+  ],
+);
+
+/** Kullanıcı bildirim tercihi (tip başına). Bu sürümde etkin kanal: uygulama içi; diğerleri gelecek kanallar için. */
+export const notificationPreferences = kliniva.table(
+  "notification_preferences",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    userId: uuid("user_id").notNull(),
+    notificationType: notificationType("notification_type").notNull(),
+    inAppEnabled: boolean("in_app_enabled").notNull().default(true),
+    futureEmailEnabled: boolean("future_email_enabled").notNull().default(false),
+    futurePushEnabled: boolean("future_push_enabled").notNull().default(false),
+    futureSmsEnabled: boolean("future_sms_enabled").notNull().default(false),
+    futureWhatsAppEnabled: boolean("future_whatsapp_enabled").notNull().default(false),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: "notification_preferences_user_fk",
+      columns: [t.tenantId, t.userId],
+      foreignColumns: [users.tenantId, users.id],
+    }).onDelete("cascade"),
+    unique("notification_preferences_uq").on(t.tenantId, t.userId, t.notificationType),
+  ],
+);
+
+/**
+ * [INTERNAL] Transactional outbox — iş olayı ile AYNI transaction'da yazılır; işlemci en az bir kez (at-least-once)
+ * işler, bildirimler tekilleştirme anahtarıyla idempotenttir. Yük yalnızca güvenli kimlik / kısa kod içerir.
+ * Silinmez (saklama ileride bakım işi); yük / tip / toplam değişmez (tetikleyici).
+ */
+export const outboxEvents = kliniva.table(
+  "outbox_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    eventType: text("event_type").notNull(),
+    aggregateType: text("aggregate_type").notNull(),
+    aggregateId: uuid("aggregate_id").notNull(),
+    payloadSafe: jsonb("payload_safe").$type<Record<string, string | number | boolean | null>>().notNull(),
+    status: outboxStatus("status").notNull().default("PENDING"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    lastErrorCode: text("last_error_code"),
+    /** Olay üretiminde tekilleştirme (ör. SKT taraması aynı lotu ikinci kez kuyruğa koymaz). */
+    deduplicationKey: text("deduplication_key"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: "outbox_events_tenant_fk",
+      columns: [t.tenantId],
+      foreignColumns: [tenants.id],
+    }).onDelete("cascade"),
+    unique("outbox_events_dedup_uq").on(t.tenantId, t.deduplicationKey),
+    check("outbox_events_type_ck", sql`${t.eventType} ~ '^[A-Z_]{3,60}$'`),
+    check("outbox_events_aggregate_ck", sql`${t.aggregateType} ~ '^[a-z_]{1,40}$'`),
+    check("outbox_events_attempts_ck", sql`${t.attemptCount} between 0 and 100`),
+    check(
+      "outbox_events_error_ck",
+      sql`${t.lastErrorCode} is null or ${t.lastErrorCode} ~ '^[A-Z0-9_]{1,60}$'`,
+    ),
+    index("outbox_events_ready_idx").on(t.status, t.availableAt),
+    index("outbox_events_tenant_status_idx").on(t.tenantId, t.status, t.availableAt),
   ],
 );

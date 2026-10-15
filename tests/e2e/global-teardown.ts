@@ -1,7 +1,7 @@
 import { rmSync } from "node:fs";
-import { AUTH_FILE } from "./support/helpers";
+import { AUTH_FILE, AUTH_FILE_DOCTOR, AUTH_FILE_RECEPTION } from "./support/helpers";
 
 /** Oturum çerezi diskte kalmaz. */
 export default function globalTeardown() {
-  rmSync(AUTH_FILE, { force: true });
+  for (const f of [AUTH_FILE, AUTH_FILE_RECEPTION, AUTH_FILE_DOCTOR]) rmSync(f, { force: true });
 }

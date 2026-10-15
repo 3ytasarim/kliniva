@@ -52,9 +52,54 @@ export async function runInTenantWith<T>(
   fn: (scope: TenantScope) => Promise<T>,
 ): Promise<T> {
   if (!isUuid(tenantId)) throw new Error("tenantQuery: invalid tenant context");
-  return db.transaction(async (tx) => {
+  const hooks: (() => void)[] = [];
+  const result = await db.transaction(async (tx) => {
     await tx.execute(sql`select set_config('app.tenant_id', ${tenantId}, true)`);
-    return fn({ tenantId, tx } as TenantScope);
+    const scope = { tenantId, tx } as TenantScope;
+    commitHooks.set(scope, hooks);
+    return fn(scope);
+  });
+  // Yalnızca COMMIT başarılıysa (geri alınan işlemde hiçbiri çalışmaz). Kancalar hata fırlatmamalı; fırlatırsa yutulur
+  // (iş işlemi zaten kalıcı — ör. outbox tetikleyicisi periyodik işlemciyle telafi edilir).
+  for (const h of hooks) {
+    try {
+      h();
+    } catch {
+      // yut
+    }
+  }
+  return result;
+}
+
+const commitHooks = new WeakMap<TenantScope, (() => void)[]>();
+
+/**
+ * Transaction BAŞARIYLA commit edildikten sonra çalışacak senkron kanca (ör. outbox işlemcisini dürtmek, SSE yayını).
+ * Geri alınan transaction'da çalışmaz. Kanca uzun iş yapmamalı (gerekirse kendi içinde zamanlar).
+ */
+export function afterCommit(scope: TenantScope, hook: () => void): void {
+  const list = commitHooks.get(scope);
+  if (!list) throw new Error("afterCommit: scope is not a tenant transaction");
+  list.push(hook);
+}
+
+/**
+ * Aynı kiracı transaction'ı içinde SAVEPOINT: iç işlem başarısız olursa yalnızca savepoint geri alınır, dış
+ * transaction ve kiracı bağlamı sürer. afterCommit kancaları dış transaction'a bağlanır.
+ */
+export async function withSavepoint<T>(
+  scope: TenantScope,
+  fn: (inner: TenantScope) => Promise<T>,
+): Promise<T> {
+  const hooks = commitHooks.get(scope);
+  return scope.tx.transaction(async (sp) => {
+    const inner = { tenantId: scope.tenantId, tx: sp } as unknown as TenantScope;
+    // Savepoint geri alınırsa, içindeki kancalar da düşer: önce geçici listeye toplanır, başarıda dışa aktarılır.
+    const local: (() => void)[] = [];
+    commitHooks.set(inner, local);
+    const out = await fn(inner);
+    if (hooks) hooks.push(...local);
+    return out;
   });
 }
 

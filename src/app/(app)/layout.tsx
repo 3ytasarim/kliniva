@@ -3,6 +3,7 @@ import { hasPermission } from "@/server/auth/authz";
 import { getClinicProfile } from "@/server/services/clinic";
 import { logoutAction } from "@/app/actions/auth";
 import { NavLink, NavSoon } from "@/components/nav-link";
+import { NotificationBell } from "@/components/notification-bell";
 import { Icon, type IconName } from "@/components/ui";
 import type { Permission } from "@/server/auth/permissions";
 
@@ -11,12 +12,19 @@ import type { Permission } from "@/server/auth/permissions";
  * Menüde öğe gizlemek yalnızca kullanım kolaylığıdır; her sayfa ve servis yetkiyi sunucuda ayrıca kontrol eder.
  */
 type NavItem =
-  | { href: string; label: string; icon: IconName; perm: Permission }
+  | { href: string; label: string; icon: IconName; perm: Permission | Permission[] }
   | { soon: true; label: string; icon: IconName };
 
 const MAIN: NavItem[] = [
   { href: "/dashboard", label: "Panel", icon: "dashboard", perm: "clinic.read" },
   { href: "/doctor", label: "Planım", icon: "calendar", perm: "doctor.self.read" },
+  {
+    href: "/operations/today",
+    label: "Bugünkü operasyon",
+    icon: "operations",
+    perm: ["appointment.read", "appointment.read.own"],
+  },
+  { href: "/notifications", label: "Bildirimler", icon: "bell", perm: "notification.read_own" },
   { href: "/patients", label: "Hastalar", icon: "patients", perm: "patient.read" },
   { href: "/appointments", label: "Randevular", icon: "calendar", perm: "appointment.read" },
   { href: "/admin/doctors", label: "Doktorlar", icon: "doctor", perm: "doctor.read" },
@@ -36,12 +44,20 @@ const SETTINGS: NavItem[] = [
   },
   { href: "/settings/services", label: "Hizmetler", icon: "settings", perm: "service.manage" },
   { href: "/admin/users", label: "Kullanıcılar", icon: "users", perm: "user.read" },
+  {
+    href: "/settings/system-events",
+    label: "Sistem olayları",
+    icon: "shield",
+    perm: "notification.admin.read_failed_events",
+  },
 ];
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const { ctx, tenant } = await requireTenant();
   const profile = await getClinicProfile(ctx);
-  const visible = (items: NavItem[]) => items.filter((n) => "soon" in n || hasPermission(ctx, n.perm));
+  const allowed = (perm: Permission | Permission[]) =>
+    (Array.isArray(perm) ? perm : [perm]).some((p) => hasPermission(ctx, p));
+  const visible = (items: NavItem[]) => items.filter((n) => "soon" in n || allowed(n.perm));
 
   return (
     <div className="min-h-dvh md:grid md:grid-cols-[260px_minmax(0,1fr)]">
@@ -56,10 +72,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               K
             </span>
           )}
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold text-brand-700 dark:text-brand-100">Kliniva AI</p>
             <p className="truncate text-xs text-slate-500">{profile.displayName || tenant.name}</p>
           </div>
+          {hasPermission(ctx, "notification.read_own") ? <NotificationBell /> : null}
         </div>
         <nav
           aria-label="Ana menü"
