@@ -22,7 +22,7 @@ const MAIN: NavItem[] = [
   { href: "/admin/doctors", label: "Doktorlar", icon: "doctor", perm: "doctor.read" },
   { href: "/admin/branches", label: "Şubeler", icon: "branch", perm: "branch.read" },
   { href: "/admin/rooms", label: "Odalar", icon: "room", perm: "room.read" },
-  { soon: true, label: "Stok", icon: "inventory" },
+  { href: "/inventory", label: "Stok", icon: "inventory", perm: "inventory.read" },
   { soon: true, label: "Raporlar", icon: "reports" },
 ];
 

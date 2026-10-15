@@ -43,7 +43,13 @@ motoru (servis + exclusion constraint), eşzamanlı rezervasyon güvenliği, ato
 tetikleyicisi), takvim (gün/hafta), yeni randevu akışı, randevu detayı, doktor portalı bugünkü liste, panel kartları,
 hasta dosyası randevular sekmesi, Sprint 1 izin/oda düzeltmesi. Ayrıntı: `docs/APPOINTMENTS.md`.
 
-## Sprint 4+ (öneri)
+## Sprint 4 — Stok ve hasta malzeme kullanımı ✅
 
-Voice AI (yetki kontrollü araçlar, `source = AI_VOICE`), stok, raporlama, KVKK m.11 bilgi talebi
+Ürün / kategori / lokasyon (şube deposu + oda), değişmez stok defteri ve tetikleyiciyle bakiye, ilk stok / alım /
+düzeltme / atomik transfer, şubeler arası transfer yetkisi, hasta malzeme kullanımı (taslak → kesinleştir → VOID),
+hizmet malzeme şablonu (öneri), kritik stok, uzlaştırma, lot/SKT temeli. Ayrıntı: `docs/INVENTORY.md`.
+
+## Sprint 5+ (öneri)
+
+Lot bazlı tüketim + SKT/FEFO, Voice AI (yetki kontrollü araçlar, `source = AI_VOICE`), raporlama, KVKK m.11 bilgi talebi
 dışa aktarımı ve düzeltme akışı, MFA zorunluluğu, orphan depo nesnesi temizliği.

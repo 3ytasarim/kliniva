@@ -44,7 +44,10 @@ export async function syncRbacCatalog(db: Db): Promise<void> {
       }
       // Rol yetkileri katalogla birebir eşitlenir (fazlası silinir).
       await tx.delete(rolePermissions).where(eq(rolePermissions.roleId, role!.id));
-      const values = def.permissions.map((p) => ({ roleId: role!.id, permissionId: permId.get(p)! }));
+      const values = [...new Set(def.permissions)].map((p) => ({
+        roleId: role!.id,
+        permissionId: permId.get(p)!,
+      }));
       if (values.length) await tx.insert(rolePermissions).values(values);
     }
   });

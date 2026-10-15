@@ -21,6 +21,9 @@ import {
   formatLocalDate,
 } from "@/components/appointment-ui";
 import { formatDateTime } from "@/components/patient-ui";
+import { listPatientMaterialUsage } from "@/server/services/material-usage";
+import { createUsageAction } from "@/app/actions/inventory";
+import { MaterialUsageList } from "@/components/material-usage-list";
 
 export const metadata: Metadata = { title: "Randevu" };
 
@@ -39,6 +42,10 @@ export default async function AppointmentPage({ params }: { params: Promise<{ id
   const today = await clinicToday(ctx);
   const statusActions = a.actions.filter((x) => x !== "CANCEL" && x !== "RESCHEDULE");
   const editable = ["BOOKED", "CONFIRMED", "CHECKED_IN", "IN_PROGRESS"].includes(a.status);
+  const canUsageRead = hasPermission(ctx, "inventory.usage.read");
+  const usages = canUsageRead ? await listPatientMaterialUsage(ctx, { appointmentId: a.id }) : [];
+  const canAddUsage =
+    hasPermission(ctx, "inventory.usage.create") && (a.status === "IN_PROGRESS" || a.status === "COMPLETED");
 
   return (
     <section className="grid gap-6">
@@ -128,6 +135,30 @@ export default async function AppointmentPage({ params }: { params: Promise<{ id
               <p className="whitespace-pre-line text-sm">{a.notes || "—"}</p>
             )}
           </div>
+
+          {canUsageRead ? (
+            <div className="card grid gap-3" id="malzemeler">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="font-semibold">Kullanılan malzemeler</h2>
+                {canAddUsage ? (
+                  <ActionForm
+                    action={createUsageAction}
+                    submitLabel="Malzeme kullanımı ekle"
+                    className="flex"
+                  >
+                    <input type="hidden" name="patientId" value={a.patient.id} />
+                    <input type="hidden" name="appointmentId" value={a.id} />
+                  </ActionForm>
+                ) : null}
+              </div>
+              {!canAddUsage && hasPermission(ctx, "inventory.usage.create") ? (
+                <p className="hint">
+                  Malzeme kullanımı randevu işlemdeyken veya tamamlandıktan sonra girilir.
+                </p>
+              ) : null}
+              <MaterialUsageList rows={usages} showAppointment={false} />
+            </div>
+          ) : null}
         </div>
 
         <div className="grid content-start gap-6">

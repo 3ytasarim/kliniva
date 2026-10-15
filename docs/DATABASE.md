@@ -43,27 +43,33 @@
 | `0006_patient_crm_security.sql`  | Belge durum makinesi tetikleyicisi (yeniden yazıldı), rıza geri çekme tetikleyicisi, 2 tabloda RLS ENABLE+FORCE, yetkiler, `patient_branches` ve normalize telefon/e-posta geri doldurma                                   |
 | `0007_appointments.sql`          | Sprint 3: `clinical_services`, `doctor_services`, `appointments`, `appointment_events`, 3 enum, randevu yapılandırması (`clinic_profiles`), indeksler                                                                      |
 | `0008_appointments_security.sql` | Doktor / oda / hasta `tstzrange` exclusion constraint'ları, durum makinesi tetikleyicisi, geçmiş append-only, 4 tabloda RLS ENABLE+FORCE, yetkiler                                                                         |
+| `0009_inventory.sql`             | Sprint 4: 9 stok tablosu, 4 enum, bileşik kiracı FK'ları (randevu ↔ hasta ↔ şube dahil), indeksler, `allow_negative_stock` (= false)                                                                                       |
+| `0010_inventory_security.sql`    | Defter → bakiye tetikleyicisi (SECURITY DEFINER, yetersiz stok reddi), defter append-only, kullanım durum makinesi, kalem koruması, `recompute_stock_balance`, 9 tabloda RLS ENABLE+FORCE, yetkiler                        |
 | `0001_security.sql`              | RLS (ENABLE + FORCE) ve politikalar; `audit_logs`, `document_templates`, `patient_documents`, `consent_choices` koruma tetikleyicileri; `current_tenant_id()`, `retention_purge_enabled()`                                 |
 
 ## Tablolar
 
-| Tablo                                      | Kapsam                    | RLS                                                      |
-| ------------------------------------------ | ------------------------- | -------------------------------------------------------- |
-| `tenants`                                  | Platform                  | —                                                        |
-| `permissions`, `role_permissions`          | Platform                  | —                                                        |
-| `roles`                                    | Platform (NULL) + kiracı  | Okuma: platform+kiracı · Yazma: kiracı / `platform_seed` |
-| `sessions`                                 | Platform (token özetiyle) | —                                                        |
-| `rate_limits`                              | Platform                  | —                                                        |
-| `branches`, `rooms`, `users`, `user_roles` | Kiracı                    | FORCE                                                    |
-| `patients`                                 | Kiracı                    | FORCE                                                    |
-| `audit_logs`                               | Kiracı                    | FORCE + append-only                                      |
-| `document_templates`                       | Platform (NULL) + kiracı  | Okuma: platform+kiracı · Yazma: kiracı / `platform_seed` |
-| `patient_documents`, `consent_choices`     | Kiracı                    | FORCE + imza sonrası değişmez                            |
-| `patient_branches`                         | Kiracı (hasta ↔ şube)     | FORCE · şube kapsamı buradan hesaplanır                  |
-| `consent_revocations`                      | Kiracı                    | FORCE + yalnızca ekleme                                  |
-| `clinical_services`, `doctor_services`     | Kiracı                    | FORCE                                                    |
-| `appointments`                             | Kiracı                    | FORCE + çakışma constraint'ları + durum tetikleyicisi    |
-| `appointment_events`                       | Kiracı                    | FORCE + yalnızca ekleme                                  |
+| Tablo                                                     | Kapsam                    | RLS                                                      |
+| --------------------------------------------------------- | ------------------------- | -------------------------------------------------------- |
+| `tenants`                                                 | Platform                  | —                                                        |
+| `permissions`, `role_permissions`                         | Platform                  | —                                                        |
+| `roles`                                                   | Platform (NULL) + kiracı  | Okuma: platform+kiracı · Yazma: kiracı / `platform_seed` |
+| `sessions`                                                | Platform (token özetiyle) | —                                                        |
+| `rate_limits`                                             | Platform                  | —                                                        |
+| `branches`, `rooms`, `users`, `user_roles`                | Kiracı                    | FORCE                                                    |
+| `patients`                                                | Kiracı                    | FORCE                                                    |
+| `audit_logs`                                              | Kiracı                    | FORCE + append-only                                      |
+| `document_templates`                                      | Platform (NULL) + kiracı  | Okuma: platform+kiracı · Yazma: kiracı / `platform_seed` |
+| `patient_documents`, `consent_choices`                    | Kiracı                    | FORCE + imza sonrası değişmez                            |
+| `patient_branches`                                        | Kiracı (hasta ↔ şube)     | FORCE · şube kapsamı buradan hesaplanır                  |
+| `consent_revocations`                                     | Kiracı                    | FORCE + yalnızca ekleme                                  |
+| `clinical_services`, `doctor_services`                    | Kiracı                    | FORCE                                                    |
+| `appointments`                                            | Kiracı                    | FORCE + çakışma constraint'ları + durum tetikleyicisi    |
+| `appointment_events`                                      | Kiracı                    | FORCE + yalnızca ekleme                                  |
+| `inventory_*`, `stock_lots`, `service_material_templates` | Kiracı                    | FORCE                                                    |
+| `stock_movements`                                         | Kiracı                    | FORCE + yalnızca ekleme (defter)                         |
+| `stock_balances`                                          | Kiracı                    | FORCE + uygulama yalnızca okur (tetikleyici yazar)       |
+| `patient_material_usages` / `_items`                      | Kiracı                    | FORCE + durum makinesi / DRAFT dışı değişmez             |
 
 ## Oturum değişkenleri (transaction'a yerel)
 
@@ -84,7 +90,7 @@ yüzden uygulama **asla** sahip rolle çalışmaz:
   kliniva şemasında CREATE **yok**, public şemasına yetki **verilmez**.
 - Yetki matrisi (fazlası da eksiği de `db:inspect` hatası): audit_logs SELECT+INSERT · consent_choices SELECT+INSERT ·
   patient_documents / document_templates SELECT+INSERT+UPDATE (tetikleyiciler korur, DELETE yok) · patients, users,
-  branches, rooms, patient_branches SELECT+INSERT+UPDATE · consent_revocations SELECT+INSERT · clinical_services, doctor_services, appointments SELECT+INSERT+UPDATE · appointment_events SELECT+INSERT · user_roles SELECT+INSERT+DELETE · sessions SELECT+INSERT+UPDATE ·
+  branches, rooms, patient_branches SELECT+INSERT+UPDATE · consent_revocations SELECT+INSERT · clinical_services, doctor_services, appointments SELECT+INSERT+UPDATE · appointment_events SELECT+INSERT · stock_movements SELECT+INSERT · stock_balances SELECT · inventory_categories/items/locations, stock_lots, patient_material_usages SELECT+INSERT+UPDATE · patient_material_usage_items, service_material_templates CRUD · user_roles SELECT+INSERT+DELETE · sessions SELECT+INSERT+UPDATE ·
   rate_limits CRUD · tenants SELECT + yalnızca `patient_seq, updated_at` UPDATE · roles/permissions/role_permissions SELECT.
 - Üretimde uygulama açılışta rolünü denetler (`src/instrumentation.ts`); güvensizse **başlamaz**.
 - İmzalı belgeler: `patient_documents` → `patients` / `branches` / `document_templates` FK'ları **NO ACTION**

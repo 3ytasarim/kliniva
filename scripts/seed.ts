@@ -5,6 +5,7 @@
  *   3. Klinik sahibi kullanıcı (SEED_OWNER_EMAIL / SEED_OWNER_PASSWORD — .env.local, `npm run env:init`)
  *   4. KVKK aydınlatma metni ve açık rıza beyanı (yayımlanmış)
  *   5. Demo hizmetler + demo doktor (her gün 08:00–20:00) — randevu akışı için
+ *   6. Demo stok lokasyonları (ana depo + oda lokasyonları)
  * Parola ve diğer sırlar ekrana yazdırılmaz.
  */
 import { loadEnvConfig } from "@next/env";
@@ -278,6 +279,40 @@ async function main() {
         .values({ tenantId, doctorId: docProfile!.id, serviceId: s.id })
         .onConflictDoNothing();
     }
+
+    // Sprint 4 — demo stok lokasyonları: şubenin ana deposu + her aktif oda için oda lokasyonu (idempotent).
+    const [wh] = await tx
+      .select({ id: schema.inventoryLocations.id })
+      .from(schema.inventoryLocations)
+      .where(
+        and(
+          eq(schema.inventoryLocations.tenantId, tenantId),
+          eq(schema.inventoryLocations.branchId, branch!.id),
+          eq(schema.inventoryLocations.type, "BRANCH_WAREHOUSE"),
+        ),
+      );
+    if (!wh) {
+      await tx
+        .insert(schema.inventoryLocations)
+        .values({ tenantId, branchId: branch!.id, type: "BRANCH_WAREHOUSE", name: "Ana Depo" });
+      console.log("✓ Şube ana deposu oluşturuldu");
+    }
+    const branchRooms = await tx
+      .select({ id: schema.rooms.id, name: schema.rooms.name })
+      .from(schema.rooms)
+      .where(
+        and(
+          eq(schema.rooms.tenantId, tenantId),
+          eq(schema.rooms.branchId, branch!.id),
+          eq(schema.rooms.active, true),
+        ),
+      );
+    for (const r of branchRooms) {
+      await tx
+        .insert(schema.inventoryLocations)
+        .values({ tenantId, branchId: branch!.id, type: "ROOM", roomId: r.id, name: r.name })
+        .onConflictDoNothing();
+    }
   });
 
   // İdempotans özeti: iki kez çalıştırıldığında sayılar değişmemelidir.
@@ -296,6 +331,7 @@ async function main() {
              (select count(*)::int from kliniva.clinical_services) as services,
              (select count(*)::int from kliniva.doctor_profiles) as doctors,
              (select count(*)::int from kliniva.doctor_services) as doctor_services,
+             (select count(*)::int from kliniva.inventory_locations) as stock_locations,
              (select count(*)::int from kliniva.user_roles ur join kliniva.roles r on r.id = ur.role_id
                 where r.key = 'PLATFORM_SUPER_ADMIN') as super_admin_in_tenant`);
     return r.rows[0]!;

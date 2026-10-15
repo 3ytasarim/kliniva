@@ -71,8 +71,7 @@ import { uuidSchema } from "@/server/validation";
  * kullanıcının yetkisi + kiracı (RLS) + şube kapsamı + doktorun kendi kapsamıyla çalışır.
  *
  * GÜVENLİK KATMANLARI
- *  1. Servis: uygunluk hesabı (okuma) → advisory lock (doktor, hasta, şube-oda) + tek sorguluk son kontrol →
- *     anlamlı hata kodu.
+ *  1. Servis: uygunluk hesabı (okuma) → tek sorguluk son kontrol → INSERT/UPDATE; anlamlı hata kodu.
  *  2. Veritabanı: doktor / oda / hasta için tstzrange exclusion constraint (eşzamanlı istekler dahil son savunma),
  *     durum makinesi tetikleyicisi, fiziksel silme yok, geçmiş yalnızca ekleme.
  *  Audit'e hasta adı / telefonu / not / iptal gerekçesi YAZILMAZ — yalnızca kimlikler, statü ve zamanlar.
@@ -87,15 +86,6 @@ function parseId(raw: unknown): string {
 }
 
 const notesAad = (tenantId: string, id: string) => `appointment.notes:${tenantId}:${id}`;
-
-async function lockKeys(scope: TenantScope, ...keys: string[]) {
-  // Deterministik sıra → kilitlenme yok. Transaction sonunda bırakılır.
-  for (const key of [...new Set(keys)].sort()) {
-    await scope.tx.execute(
-      sql`select pg_advisory_xact_lock(hashtextextended(${`${scope.tenantId}:appt:${key}`}, 0))`,
-    );
-  }
-}
 
 const CONFLICT_CODES: AppErrorCode[] = [
   "APPOINTMENT_CONFLICT",
@@ -150,7 +140,7 @@ async function bookingConfig(scope: TenantScope): Promise<BookingConfig> {
   };
 }
 
-async function selfDoctorId(scope: TenantScope, ctx: AuthContext): Promise<string | null> {
+export async function selfDoctorId(scope: TenantScope, ctx: AuthContext): Promise<string | null> {
   const [row] = await scope.tx
     .select({ id: doctorProfiles.id })
     .from(doctorProfiles)
@@ -183,7 +173,7 @@ async function visibility(scope: TenantScope, ctx: AuthContext): Promise<SQL | u
   return conds.length ? or(...conds) : sql`false`;
 }
 
-async function loadAccessibleAppointment(
+export async function loadAccessibleAppointment(
   scope: TenantScope,
   ctx: AuthContext,
   rawId: unknown,
@@ -758,6 +748,16 @@ async function placeAppointment(
     excludeId?: string;
   },
 ): Promise<Placement> {
+  // Hızlı ret: istenen başlangıç anı zaten dolu mu (tek sorgu, süreden bağımsız)? Yarışı kaybeden eşzamanlı istekler
+  // yapılandırma / hizmet / gün hesabına girmeden döner → bağlantı havuzu yük altında tükenmez.
+  await assertStillFree(scope, {
+    doctorId: args.doctorId,
+    patientId: args.patientId,
+    roomId: args.roomId ?? null,
+    start: args.start,
+    end: new Date(args.start.getTime() + UNIT_MS),
+    excludeId: args.excludeId,
+  });
   const cfg = await bookingConfig(scope);
   const now = new Date();
   if (args.start.getTime() < now.getTime()) throw new AppError("APPOINTMENT_IN_PAST");
@@ -891,9 +891,9 @@ export async function createAppointment(ctx: AuthContext, input: unknown): Promi
       });
       return { patientId: patient.id, p: placed };
     });
-    // 2) Yazma: kilit + tek sorguluk son kontrol + INSERT (+ exclusion constraint).
+    // 2) Yazma: tek sorguluk son kontrol (kesinleşmiş çakışmalar → anlamlı kod) + INSERT. Eşzamanlı yarışı
+    //    exclusion constraint'lar veritabanında çözer (bekleyen istemci gidiş-dönüşü olmadan); 23P01 → çakışma kodu.
     return tenantQuery(ctx, async (scope) => {
-      await lockKeys(scope, `doctor:${data.doctorId}`, `patient:${patientId}`, `rooms:${data.branchId}`);
       await assertStillFree(scope, {
         doctorId: data.doctorId,
         patientId,
@@ -970,7 +970,7 @@ export async function rescheduleAppointment(ctx: AuthContext, rawId: unknown, in
       }),
     );
     await tenantQuery(ctx, async (scope) => {
-      await lockKeys(scope, `doctor:${pre.doctorId}`, `patient:${pre.patientId}`, `rooms:${pre.branchId}`);
+      // Randevu satırı kilitlenir (aynı randevuya eşzamanlı ikinci taşıma bekler); çakışmayı constraint çözer.
       const a = await loadAccessibleAppointment(scope, ctx, pre.id, { forUpdate: true });
       if (!isReschedulable(a.status)) throw new AppError("INVALID_STATUS_TRANSITION");
       if (a.scheduledStart.getTime() !== pre.scheduledStart.getTime())

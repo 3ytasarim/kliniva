@@ -37,6 +37,15 @@ export const EXPECTED_TABLES = [
   "appointments",
   "clinical_services",
   "doctor_services",
+  "inventory_categories",
+  "inventory_items",
+  "inventory_locations",
+  "patient_material_usage_items",
+  "patient_material_usages",
+  "service_material_templates",
+  "stock_balances",
+  "stock_lots",
+  "stock_movements",
 ] as const;
 
 /** RLS (ENABLE + FORCE) zorunlu tablolar: kiracı tabloları + platform/kiracı karışık tablolar. */
@@ -65,6 +74,15 @@ export const RLS_TABLES = [
   "appointments",
   "clinical_services",
   "doctor_services",
+  "inventory_categories",
+  "inventory_items",
+  "inventory_locations",
+  "patient_material_usage_items",
+  "patient_material_usages",
+  "service_material_templates",
+  "stock_balances",
+  "stock_lots",
+  "stock_movements",
 ] as const;
 
 /** Uygulama rolünün tablo bazında OLMASI GEREKEN yetkiler (fazlası da eksiği de hata). */
@@ -102,6 +120,16 @@ export const APP_PRIVILEGES: Record<string, string[]> = {
   doctor_services: ["INSERT", "SELECT", "UPDATE"],
   appointments: ["INSERT", "SELECT", "UPDATE"],
   appointment_events: ["INSERT", "SELECT"],
+  // Sprint 4 — bakiye yalnızca okunur (defter tetikleyicisi yazar); defter yalnızca eklenir
+  inventory_categories: ["INSERT", "SELECT", "UPDATE"],
+  inventory_items: ["INSERT", "SELECT", "UPDATE"],
+  inventory_locations: ["INSERT", "SELECT", "UPDATE"],
+  stock_lots: ["INSERT", "SELECT", "UPDATE"],
+  patient_material_usages: ["INSERT", "SELECT", "UPDATE"],
+  stock_balances: ["SELECT"],
+  stock_movements: ["INSERT", "SELECT"],
+  patient_material_usage_items: ["DELETE", "INSERT", "SELECT", "UPDATE"],
+  service_material_templates: ["DELETE", "INSERT", "SELECT", "UPDATE"],
 };
 
 export function isPoolerUrl(url: string | undefined): boolean | null {

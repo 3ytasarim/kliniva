@@ -103,6 +103,12 @@ export default async function DoctorPortalPage() {
                           label="Tamamla"
                           variant="primary"
                         />
+                      ) : null}
+                      {(a.status === "IN_PROGRESS" || a.status === "COMPLETED") &&
+                      hasPermission(ctx, "inventory.usage.create") ? (
+                        <Link href={`/appointments/${a.id}#malzemeler`} className="btn-ghost btn-sm ml-2">
+                          Malzeme kullanımı
+                        </Link>
                       ) : a.status === "BOOKED" || a.status === "CONFIRMED" ? (
                         <span className="text-xs text-slate-500">Hasta bekleniyor</span>
                       ) : null}

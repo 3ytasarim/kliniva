@@ -19,9 +19,11 @@ export function getPool(): Pool {
   if (!pool) {
     pool = new Pool({
       connectionString: requireDatabaseUrl(),
-      max: Number(process.env.DB_POOL_MAX ?? 5),
+      // Yük patlamasında (ör. aynı slota onlarca eşzamanlı istek) bağlantı beklemek, 10 sn sonra hata vermekten iyidir;
+      // 30 sn tipik sunucusuz istek süresi sınırıdır. Havuz boyutu ortamdan ayarlanabilir.
+      max: Number(process.env.DB_POOL_MAX ?? 10),
       idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 10_000,
+      connectionTimeoutMillis: 30_000,
     });
     // pg hata nesneleri bağlantı dizesini içermez; yine de yalnızca kod/mesaj sınıfı loglanır.
     pool.on("error", (err) => {

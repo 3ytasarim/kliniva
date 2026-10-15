@@ -8,6 +8,8 @@ import { getPatient, getPatientActivity } from "@/server/services/patients";
 import { getPatientConsentStates, listPatientDocuments, listTemplates } from "@/server/services/documents";
 import { revokeConsentAction, voidDocumentAction } from "@/app/actions/patients";
 import { listPatientAppointments } from "@/server/services/appointments";
+import { listPatientMaterialUsage } from "@/server/services/material-usage";
+import { MaterialUsageList } from "@/components/material-usage-list";
 import { AppointmentStatusBadge, formatLocalDate } from "@/components/appointment-ui";
 import type { AppointmentListItem } from "@/server/services/appointments";
 import { ActionForm, Field, SelectField } from "@/components/action-form";
@@ -28,7 +30,7 @@ import {
 
 export const metadata: Metadata = { title: "Hasta" };
 
-type Tab = "overview" | "appointments" | "documents" | "activity";
+type Tab = "overview" | "appointments" | "materials" | "documents" | "activity";
 
 const REVOKE_CHANNELS = [
   { value: "IN_PERSON", label: "Yüz yüze" },
@@ -66,6 +68,7 @@ export default async function PatientPage({
   const canDocs = hasPermission(ctx, "patient.document.read");
   const canActivity = hasPermission(ctx, "audit.read");
   const canAppts = hasPermission(ctx, "appointment.read") || hasPermission(ctx, "appointment.read.own");
+  const canMaterials = hasPermission(ctx, "inventory.usage.read");
   const tab: Tab =
     sp.tab === "documents" && canDocs
       ? "documents"
@@ -73,11 +76,14 @@ export default async function PatientPage({
         ? "activity"
         : sp.tab === "appointments" && canAppts
           ? "appointments"
-          : "overview";
+          : sp.tab === "materials" && canMaterials
+            ? "materials"
+            : "overview";
 
   const tabs: { key: Tab; label: string; show: boolean; soon?: boolean }[] = [
     { key: "overview", label: "Genel bakış", show: true },
     { key: "appointments", label: "Randevular", show: canAppts },
+    { key: "materials", label: "Malzemeler", show: canMaterials },
     { key: "documents", label: "Belgeler", show: canDocs },
     { key: "activity", label: "Aktivite", show: canActivity },
   ];
@@ -139,6 +145,7 @@ export default async function PatientPage({
       {tab === "documents" ? <Documents ctx={ctx} patientId={patient.id} /> : null}
       {tab === "activity" ? <Activity ctx={ctx} patientId={patient.id} /> : null}
       {tab === "appointments" ? <Appointments ctx={ctx} patientId={patient.id} /> : null}
+      {tab === "materials" ? <Materials ctx={ctx} patientId={patient.id} /> : null}
     </section>
   );
 }
@@ -439,6 +446,18 @@ async function Appointments({ ctx, patientId }: { ctx: Ctx; patientId: string })
       ) : null}
       <AppointmentRows title="Yaklaşan randevular" items={upcoming} />
       <AppointmentRows title="Geçmiş randevular" items={past} />
+    </div>
+  );
+}
+
+async function Materials({ ctx, patientId }: { ctx: Ctx; patientId: string }) {
+  const rows = await listPatientMaterialUsage(ctx, { patientId });
+  return (
+    <div className="card p-0">
+      <h2 className="px-5 pt-5 font-semibold">Malzeme kullanımları</h2>
+      <div className="p-5 pt-3">
+        <MaterialUsageList rows={rows} />
+      </div>
     </div>
   );
 }

@@ -20,7 +20,8 @@ export type AppErrorCode =
   | "SLOT_NOT_AVAILABLE"
   | "APPOINTMENT_IN_PAST"
   | "BOOKING_OUT_OF_RANGE"
-  | "INVALID_STATUS_TRANSITION";
+  | "INVALID_STATUS_TRANSITION"
+  | "INSUFFICIENT_STOCK";
 
 const STATUS: Record<AppErrorCode, number> = {
   UNAUTHENTICATED: 401,
@@ -41,6 +42,7 @@ const STATUS: Record<AppErrorCode, number> = {
   APPOINTMENT_IN_PAST: 422,
   BOOKING_OUT_OF_RANGE: 422,
   INVALID_STATUS_TRANSITION: 409,
+  INSUFFICIENT_STOCK: 409,
 };
 
 const MESSAGES: Record<AppErrorCode, string> = {
@@ -61,7 +63,8 @@ const MESSAGES: Record<AppErrorCode, string> = {
   SLOT_NOT_AVAILABLE: "Seçilen saat artık uygun değil. Lütfen uygun saatleri yenileyin.",
   APPOINTMENT_IN_PAST: "Geçmiş bir zamana randevu oluşturulamaz.",
   BOOKING_OUT_OF_RANGE: "Seçilen tarih randevu alınabilecek aralığın dışında.",
-  INVALID_STATUS_TRANSITION: "Randevu bu duruma geçirilemez.",
+  INVALID_STATUS_TRANSITION: "Kayıt bu duruma geçirilemez.",
+  INSUFFICIENT_STOCK: "Seçilen lokasyonda yeterli stok yok.",
 };
 
 export class AppError extends Error {

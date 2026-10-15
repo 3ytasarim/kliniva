@@ -42,9 +42,10 @@ ataması çakışma kontrolünde).
 
 ## Çakışma motoru
 
-1. **Servis:** uygunluk hesabı ayrı bir okuma transaction'ında yapılır; ardından yazma transaction'ı
-   advisory lock (doktor, hasta, şube-oda) alır, **tek sorguyla** son kontrolü yapar ve INSERT/UPDATE eder. Kilitli
-   bölüm kısa olduğu için eşzamanlı yoğun istekte bağlantı havuzu tükenmez (40 eşzamanlı istek testi).
+1. **Servis:** istenen başlangıç anı zaten doluysa tek sorguyla hemen reddedilir; ardından uygunluk ayrı bir okuma
+   transaction'ında hesaplanır; yazma transaction'ı tek sorguluk son kontrol + INSERT/UPDATE yapar (anlamlı hata
+   kodu). Uygulama düzeyinde kilit kullanılmaz: eşzamanlı yarışı exclusion constraint veritabanında, bekleyen istemci
+   gidiş-dönüşü olmadan çözer (`23P01` → çakışma kodu). Böylece 40 eşzamanlı istekte bağlantı havuzu tükenmez.
 2. **Veritabanı:** aktif statülerde (`BOOKED, CONFIRMED, CHECKED_IN, IN_PROGRESS, COMPLETED`) üç exclusion
    constraint — aynı doktor, aynı oda, aynı hasta için `tstzrange(start, end, '[)')` örtüşmesi imkânsız.
    Bitişik randevular (`09:00–10:00` / `10:00–11:00`) çakışmaz. `CANCELLED`, `NO_SHOW`, `DRAFT` slot tutmaz.

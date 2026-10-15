@@ -1,6 +1,7 @@
 /**
  * E2E temizliği — yalnızca E2E testinin seed klinikte oluşturduğu hastaları (soyadı E2E_SURNAME) yasal imha yoluyla
- * (kliniva.retention_purge = 'on', migration rolü) siler: randevular + geçmişi, rıza geri çekmeleri, seçimler, belgeler, şube bağları,
+ * (kliniva.retention_purge = 'on', migration rolü) siler: E2E stok ürünleri (kod E2E-*) ve hareketleri, malzeme
+ * kullanımları, randevular + geçmişi, rıza geri çekmeleri, seçimler, belgeler, şube bağları,
  * hasta. Depodaki şifreli belge / imza nesneleri de imha bağlamında silinir. Audit kayıtları (PII içermez) korunur.
  * Başka hiçbir kayda dokunmaz. Çıktıda yalnızca sayılar vardır.
  *
@@ -30,6 +31,35 @@ async function main() {
         sql`select id from kliniva.patients where tenant_id = ${t.id} and last_name = ${E2E_SURNAME}`,
       )
     ).rows.map((r) => r.id);
+    // E2E stok ürünleri (kod "E2E-" ile başlar) ve E2E hastalarının malzeme kullanımları.
+    const items = (
+      await tx.execute<{ id: string }>(
+        sql`select id from kliniva.inventory_items where tenant_id = ${t.id} and code like 'E2E-%'`,
+      )
+    ).rows.map((r) => r.id);
+    const uuidList = (xs: string[]) =>
+      sql.join(
+        xs.map((x) => sql`${x}::uuid`),
+        sql`, `,
+      );
+    const itemCond = items.length ? sql`inventory_item_id in (${uuidList(items)})` : sql`false`;
+    const patientCond = ids.length ? sql`patient_id in (${uuidList(ids)})` : sql`false`;
+    await tx.execute(sql`delete from kliniva.patient_material_usage_items where tenant_id = ${t.id} and (${itemCond}
+      or patient_usage_id in (select id from kliniva.patient_material_usages where tenant_id = ${t.id} and ${patientCond}))`);
+    await tx.execute(sql`delete from kliniva.stock_movements where tenant_id = ${t.id} and (${itemCond}
+      or patient_usage_id in (select id from kliniva.patient_material_usages where tenant_id = ${t.id} and ${patientCond}))`);
+    await tx.execute(sql`delete from kliniva.stock_balances where tenant_id = ${t.id} and ${itemCond}`);
+    await tx.execute(
+      sql`delete from kliniva.patient_material_usages where tenant_id = ${t.id} and ${patientCond}`,
+    );
+    if (items.length) {
+      await tx.execute(
+        sql`delete from kliniva.inventory_items where tenant_id = ${t.id} and id in (${uuidList(items)})`,
+      );
+    }
+    await tx.execute(
+      sql`delete from kliniva.inventory_categories where tenant_id = ${t.id} and name like 'E2E %'`,
+    );
     if (!ids.length) return 0;
     const list = sql.join(
       ids.map((id) => sql`${id}::uuid`),

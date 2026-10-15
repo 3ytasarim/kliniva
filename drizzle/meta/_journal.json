@@ -64,6 +64,20 @@
       "when": 1792056491279,
       "tag": "0008_appointments_security",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792067390686,
+      "tag": "0009_inventory",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792067406572,
+      "tag": "0010_inventory_security",
+      "breakpoints": true
     }
   ]
 }

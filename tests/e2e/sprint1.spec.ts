@@ -25,9 +25,10 @@ test("klinik sahibi: sidebar, klinik ayarları, şubeler, odalar, doktorlar — 
   const nav = page.getByRole("navigation", { name: "Ana menü" });
   await expect(nav.getByRole("link", { name: "Doktorlar" })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Şubeler" })).toBeVisible();
-  // Geliştirilmemiş özellikler bağlantı DEĞİL (tıklanamaz, "Yakında"). Randevular Sprint 3 ile aktif.
-  await expect(nav.getByRole("link", { name: /Stok/ })).toHaveCount(0);
-  await expect(nav.getByText("Stok")).toBeVisible();
+  // Geliştirilmemiş özellikler bağlantı DEĞİL (tıklanamaz, "Yakında"). Randevular (Sprint 3) ve Stok (Sprint 4) aktif.
+  await expect(nav.getByRole("link", { name: /Raporlar/ })).toHaveCount(0);
+  await expect(nav.getByText("Raporlar")).toBeVisible();
+  await expect(nav.getByRole("link", { name: "Stok" })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Randevular" })).toBeVisible();
 
   const pages: [string, RegExp][] = [

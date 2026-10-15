@@ -23,6 +23,7 @@ import {
   index,
   integer,
   jsonb,
+  numeric,
   pgSchema,
   primaryKey,
   smallint,
@@ -512,6 +513,8 @@ export const clinicProfiles = kliniva.table(
     cancellationReasonRequired: boolean("cancellation_reason_required").notNull().default(true),
     /** Uygun saat listesinin adımı (dakika). */
     slotIntervalMinutes: integer("slot_interval_minutes").notNull().default(15),
+    /** Negatif stok — bu sürümde her zaman false (DB check + bakiye check). */
+    allowNegativeStock: boolean("allow_negative_stock").notNull().default(false),
     active: boolean("active").notNull().default(true),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -522,6 +525,7 @@ export const clinicProfiles = kliniva.table(
     check("clinic_profiles_notice_ck", sql`${t.minBookingNoticeMinutes} between 0 and 10080`),
     check("clinic_profiles_horizon_ck", sql`${t.maxBookingDaysAhead} between 1 and 730`),
     check("clinic_profiles_slot_ck", sql`${t.slotIntervalMinutes} in (5, 10, 15, 20, 30, 60)`),
+    check("clinic_profiles_negative_stock_ck", sql`${t.allowNegativeStock} = false`),
   ],
 );
 
@@ -965,6 +969,7 @@ export const appointments = kliniva.table(
       foreignColumns: [clinicalServices.tenantId, clinicalServices.id],
     }),
     unique("appointments_tenant_id_uq").on(t.tenantId, t.id),
+    unique("appointments_tenant_id_patient_branch_uq").on(t.tenantId, t.id, t.patientId, t.branchId),
     check("appointments_time_ck", sql`${t.scheduledStart} < ${t.scheduledEnd}`),
     check(
       "appointments_duration_ck",
@@ -1002,5 +1007,391 @@ export const appointmentEvents = kliniva.table(
       foreignColumns: [appointments.tenantId, appointments.id],
     }),
     index("appointment_events_appointment_idx").on(t.tenantId, t.appointmentId, t.createdAt),
+  ],
+);
+
+// ---------------------------------------------------------------- Sprint 4: stok
+
+export const inventoryUnit = kliniva.enum("inventory_unit", [
+  "PIECE",
+  "BOX",
+  "PACK",
+  "BOTTLE",
+  "ML",
+  "LITER",
+  "GRAM",
+  "KG",
+  "PAIR",
+  "SET",
+  "OTHER",
+]);
+export const inventoryLocationType = kliniva.enum("inventory_location_type", ["BRANCH_WAREHOUSE", "ROOM"]);
+export const stockMovementType = kliniva.enum("stock_movement_type", [
+  "INITIAL_STOCK",
+  "PURCHASE",
+  "ADJUSTMENT_IN",
+  "ADJUSTMENT_OUT",
+  "TRANSFER",
+  "PATIENT_USAGE",
+  "RETURN_FROM_PATIENT_USAGE",
+  "WRITE_OFF",
+]);
+export const materialUsageStatus = kliniva.enum("material_usage_status", ["DRAFT", "FINALIZED", "VOIDED"]);
+
+/** Miktar: numeric(14,3) — float YOK. Drizzle string döndürür. */
+const qty = (name: string) => numeric(name, { precision: 14, scale: 3 });
+
+/** [INTERNAL] Stok kategorisi. */
+export const inventoryCategories = kliniva.table(
+  "inventory_categories",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description"),
+    active: boolean("active").notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    unique("inventory_categories_tenant_id_uq").on(t.tenantId, t.id),
+    unique("inventory_categories_tenant_name_uq").on(t.tenantId, t.name),
+  ],
+);
+
+/** [INTERNAL] Stok / sarf ürünü. Birim dönüşümü yok: tüm hareketler ürünün birimiyle. */
+export const inventoryItems = kliniva.table(
+  "inventory_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    code: text("code"),
+    barcode: text("barcode"),
+    categoryId: uuid("category_id"),
+    unit: inventoryUnit("unit").notNull().default("PIECE"),
+    trackInventory: boolean("track_inventory").notNull().default(true),
+    /** Lot / son kullanma takibi — Sprint 4'te model temeli; lot bazlı tüketim Sprint 5. */
+    trackLots: boolean("track_lots").notNull().default(false),
+    trackExpiry: boolean("track_expiry").notNull().default(false),
+    minimumStockLevel: qty("minimum_stock_level"),
+    active: boolean("active").notNull().default(true),
+    description: text("description"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: "inventory_items_category_fk",
+      columns: [t.tenantId, t.categoryId],
+      foreignColumns: [inventoryCategories.tenantId, inventoryCategories.id],
+    }),
+    unique("inventory_items_tenant_id_uq").on(t.tenantId, t.id),
+    unique("inventory_items_tenant_code_uq").on(t.tenantId, t.code),
+    unique("inventory_items_tenant_barcode_uq").on(t.tenantId, t.barcode),
+    check("inventory_items_min_ck", sql`${t.minimumStockLevel} is null or ${t.minimumStockLevel} >= 0`),
+    index("inventory_items_tenant_name_idx").on(t.tenantId, t.name),
+  ],
+);
+
+/** Stok lokasyonu: şube deposu (room_id NULL) veya oda (room_id zorunlu, oda başına tek lokasyon). */
+export const inventoryLocations = kliniva.table(
+  "inventory_locations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    branchId: uuid("branch_id").notNull(),
+    type: inventoryLocationType("type").notNull(),
+    roomId: uuid("room_id"),
+    name: text("name").notNull(),
+    active: boolean("active").notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: "inventory_locations_branch_fk",
+      columns: [t.tenantId, t.branchId],
+      foreignColumns: [branches.tenantId, branches.id],
+    }),
+    foreignKey({
+      name: "inventory_locations_room_fk",
+      columns: [t.tenantId, t.branchId, t.roomId],
+      foreignColumns: [rooms.tenantId, rooms.branchId, rooms.id],
+    }),
+    unique("inventory_locations_tenant_id_uq").on(t.tenantId, t.id),
+    unique("inventory_locations_tenant_branch_id_uq").on(t.tenantId, t.branchId, t.id),
+    unique("inventory_locations_branch_name_uq").on(t.tenantId, t.branchId, t.name),
+    unique("inventory_locations_room_uq").on(t.tenantId, t.roomId),
+    check("inventory_locations_room_ck", sql`(${t.type} = 'ROOM') = (${t.roomId} is not null)`),
+  ],
+);
+
+/**
+ * Bakiye (önbellek): yalnızca stock_movements tetikleyicisi yazar — uygulama rolü yalnızca okur.
+ * quantity >= 0 (negatif stok yok). Kaynak gerçek: hareket defteri.
+ */
+export const stockBalances = kliniva.table(
+  "stock_balances",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    inventoryItemId: uuid("inventory_item_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    quantity: qty("quantity").notNull().default("0"),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: "stock_balances_item_fk",
+      columns: [t.tenantId, t.inventoryItemId],
+      foreignColumns: [inventoryItems.tenantId, inventoryItems.id],
+    }),
+    foreignKey({
+      name: "stock_balances_location_fk",
+      columns: [t.tenantId, t.locationId],
+      foreignColumns: [inventoryLocations.tenantId, inventoryLocations.id],
+    }),
+    unique("stock_balances_uq").on(t.tenantId, t.inventoryItemId, t.locationId),
+    check("stock_balances_non_negative_ck", sql`${t.quantity} >= 0`),
+    index("stock_balances_location_idx").on(t.tenantId, t.locationId, t.inventoryItemId),
+  ],
+);
+
+/** Lot / son kullanma temeli (Sprint 5: lot bazlı tüketim). */
+export const stockLots = kliniva.table(
+  "stock_lots",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    inventoryItemId: uuid("inventory_item_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    lotNumber: text("lot_number"),
+    expiryDate: date("expiry_date"),
+    quantity: qty("quantity").notNull().default("0"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: "stock_lots_item_fk",
+      columns: [t.tenantId, t.inventoryItemId],
+      foreignColumns: [inventoryItems.tenantId, inventoryItems.id],
+    }),
+    foreignKey({
+      name: "stock_lots_location_fk",
+      columns: [t.tenantId, t.locationId],
+      foreignColumns: [inventoryLocations.tenantId, inventoryLocations.id],
+    }),
+    unique("stock_lots_tenant_id_uq").on(t.tenantId, t.id),
+    check("stock_lots_non_negative_ck", sql`${t.quantity} >= 0`),
+    index("stock_lots_expiry_idx").on(t.tenantId, t.expiryDate),
+  ],
+);
+
+/** [PERSONAL] Hasta / randevu bazlı sarf kullanımı. DRAFT stok düşürmez; FINALIZED değişmez; VOIDED ters hareket. */
+export const patientMaterialUsages = kliniva.table(
+  "patient_material_usages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    patientId: uuid("patient_id").notNull(),
+    appointmentId: uuid("appointment_id"),
+    branchId: uuid("branch_id").notNull(),
+    roomId: uuid("room_id"),
+    doctorId: uuid("doctor_id"),
+    status: materialUsageStatus("status").notNull().default("DRAFT"),
+    /** [SENSITIVE] hasta bağlantılı not — AES-256-GCM. */
+    notesEncrypted: text("notes_encrypted"),
+    createdByUserId: uuid("created_by_user_id").notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    finalizedAt: timestamp("finalized_at", { withTimezone: true }),
+    finalizedByUserId: uuid("finalized_by_user_id"),
+    voidedAt: timestamp("voided_at", { withTimezone: true }),
+    voidedByUserId: uuid("voided_by_user_id"),
+    voidReason: text("void_reason"),
+  },
+  (t) => [
+    foreignKey({
+      name: "patient_material_usages_patient_fk",
+      columns: [t.tenantId, t.patientId],
+      foreignColumns: [patients.tenantId, patients.id],
+    }),
+    foreignKey({
+      name: "patient_material_usages_branch_fk",
+      columns: [t.tenantId, t.branchId],
+      foreignColumns: [branches.tenantId, branches.id],
+    }),
+    foreignKey({
+      name: "patient_material_usages_room_fk",
+      columns: [t.tenantId, t.branchId, t.roomId],
+      foreignColumns: [rooms.tenantId, rooms.branchId, rooms.id],
+    }),
+    foreignKey({
+      name: "patient_material_usages_doctor_fk",
+      columns: [t.tenantId, t.doctorId],
+      foreignColumns: [doctorProfiles.tenantId, doctorProfiles.id],
+    }),
+    /** Randevu AYNI kiracı + AYNI hasta + AYNI şube olmak zorunda (DB seviyesinde). */
+    foreignKey({
+      name: "patient_material_usages_appointment_fk",
+      columns: [t.tenantId, t.appointmentId, t.patientId, t.branchId],
+      foreignColumns: [appointments.tenantId, appointments.id, appointments.patientId, appointments.branchId],
+    }),
+    unique("patient_material_usages_tenant_id_uq").on(t.tenantId, t.id),
+    index("patient_material_usages_patient_idx").on(t.tenantId, t.patientId, t.createdAt),
+    index("patient_material_usages_appointment_idx").on(t.tenantId, t.appointmentId),
+  ],
+);
+
+export const patientMaterialUsageItems = kliniva.table(
+  "patient_material_usage_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    patientUsageId: uuid("patient_usage_id").notNull(),
+    inventoryItemId: uuid("inventory_item_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    lotId: uuid("lot_id"),
+    quantity: qty("quantity").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: "pmu_items_usage_fk",
+      columns: [t.tenantId, t.patientUsageId],
+      foreignColumns: [patientMaterialUsages.tenantId, patientMaterialUsages.id],
+    }),
+    foreignKey({
+      name: "pmu_items_item_fk",
+      columns: [t.tenantId, t.inventoryItemId],
+      foreignColumns: [inventoryItems.tenantId, inventoryItems.id],
+    }),
+    foreignKey({
+      name: "pmu_items_location_fk",
+      columns: [t.tenantId, t.locationId],
+      foreignColumns: [inventoryLocations.tenantId, inventoryLocations.id],
+    }),
+    foreignKey({
+      name: "pmu_items_lot_fk",
+      columns: [t.tenantId, t.lotId],
+      foreignColumns: [stockLots.tenantId, stockLots.id],
+    }),
+    unique("pmu_items_uq").on(t.tenantId, t.patientUsageId, t.inventoryItemId, t.locationId),
+    check("pmu_items_quantity_ck", sql`${t.quantity} > 0`),
+  ],
+);
+
+/**
+ * Stok hareket DEFTERİ — kaynak gerçek. Yalnızca eklenir (UPDATE / DELETE yok; düzeltme = ters hareket).
+ * Bakiyeyi tetikleyici günceller; çıkışta yetersiz stok → hareket reddedilir.
+ */
+export const stockMovements = kliniva.table(
+  "stock_movements",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    inventoryItemId: uuid("inventory_item_id").notNull(),
+    movementType: stockMovementType("movement_type").notNull(),
+    fromLocationId: uuid("from_location_id"),
+    toLocationId: uuid("to_location_id"),
+    quantity: qty("quantity").notNull(),
+    patientId: uuid("patient_id"),
+    appointmentId: uuid("appointment_id"),
+    patientUsageId: uuid("patient_usage_id"),
+    lotId: uuid("lot_id"),
+    reference: text("reference"),
+    reason: text("reason"),
+    createdByUserId: uuid("created_by_user_id").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: "stock_movements_item_fk",
+      columns: [t.tenantId, t.inventoryItemId],
+      foreignColumns: [inventoryItems.tenantId, inventoryItems.id],
+    }),
+    foreignKey({
+      name: "stock_movements_from_fk",
+      columns: [t.tenantId, t.fromLocationId],
+      foreignColumns: [inventoryLocations.tenantId, inventoryLocations.id],
+    }),
+    foreignKey({
+      name: "stock_movements_to_fk",
+      columns: [t.tenantId, t.toLocationId],
+      foreignColumns: [inventoryLocations.tenantId, inventoryLocations.id],
+    }),
+    foreignKey({
+      name: "stock_movements_patient_fk",
+      columns: [t.tenantId, t.patientId],
+      foreignColumns: [patients.tenantId, patients.id],
+    }),
+    foreignKey({
+      name: "stock_movements_appointment_fk",
+      columns: [t.tenantId, t.appointmentId],
+      foreignColumns: [appointments.tenantId, appointments.id],
+    }),
+    foreignKey({
+      name: "stock_movements_usage_fk",
+      columns: [t.tenantId, t.patientUsageId],
+      foreignColumns: [patientMaterialUsages.tenantId, patientMaterialUsages.id],
+    }),
+    foreignKey({
+      name: "stock_movements_lot_fk",
+      columns: [t.tenantId, t.lotId],
+      foreignColumns: [stockLots.tenantId, stockLots.id],
+    }),
+    check("stock_movements_quantity_ck", sql`${t.quantity} > 0`),
+    check(
+      "stock_movements_shape_ck",
+      sql`case ${t.movementType}
+        when 'TRANSFER' then ${t.fromLocationId} is not null and ${t.toLocationId} is not null and ${t.fromLocationId} <> ${t.toLocationId}
+        when 'INITIAL_STOCK' then ${t.fromLocationId} is null and ${t.toLocationId} is not null
+        when 'PURCHASE' then ${t.fromLocationId} is null and ${t.toLocationId} is not null
+        when 'ADJUSTMENT_IN' then ${t.fromLocationId} is null and ${t.toLocationId} is not null
+        when 'RETURN_FROM_PATIENT_USAGE' then ${t.fromLocationId} is null and ${t.toLocationId} is not null and ${t.patientUsageId} is not null
+        when 'PATIENT_USAGE' then ${t.fromLocationId} is not null and ${t.toLocationId} is null and ${t.patientUsageId} is not null
+        else ${t.fromLocationId} is not null and ${t.toLocationId} is null end`,
+    ),
+    index("stock_movements_item_idx").on(t.tenantId, t.inventoryItemId, t.createdAt),
+    index("stock_movements_from_idx").on(t.tenantId, t.fromLocationId, t.createdAt),
+    index("stock_movements_to_idx").on(t.tenantId, t.toLocationId, t.createdAt),
+    index("stock_movements_usage_idx").on(t.tenantId, t.patientUsageId),
+  ],
+);
+
+/** Hizmet malzeme şablonu — YALNIZCA öneri; stok düşürmez. */
+export const serviceMaterialTemplates = kliniva.table(
+  "service_material_templates",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    clinicalServiceId: uuid("clinical_service_id").notNull(),
+    inventoryItemId: uuid("inventory_item_id").notNull(),
+    defaultQuantity: qty("default_quantity").notNull(),
+    required: boolean("required").notNull().default(false),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: "smt_service_fk",
+      columns: [t.tenantId, t.clinicalServiceId],
+      foreignColumns: [clinicalServices.tenantId, clinicalServices.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "smt_item_fk",
+      columns: [t.tenantId, t.inventoryItemId],
+      foreignColumns: [inventoryItems.tenantId, inventoryItems.id],
+    }).onDelete("cascade"),
+    unique("smt_uq").on(t.tenantId, t.clinicalServiceId, t.inventoryItemId),
+    check("smt_quantity_ck", sql`${t.defaultQuantity} > 0`),
   ],
 );

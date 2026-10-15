@@ -46,6 +46,20 @@ export const PERMISSIONS = {
   "appointment.complete": "Randevuyu tamamlama",
   "appointment.no_show": "Gelmedi olarak işaretleme",
   "appointment.availability.read": "Doktor uygunluğunu / boş saatleri görüntüleme",
+  // Sprint 4 — stok
+  "inventory.read": "Stok ürünlerini, lokasyonları ve bakiyeleri görüntüleme (şube kapsamında)",
+  "inventory.item.create": "Stok ürünü / kategori / lokasyon oluşturma",
+  "inventory.item.update": "Stok ürünü / kategori / lokasyon güncelleme, pasifleştirme",
+  "inventory.stock.add": "Stok girişi (ilk stok / alım)",
+  "inventory.stock.adjust": "Stok düzeltme (sayım farkı, fire)",
+  "inventory.transfer": "Şube içi stok transferi",
+  "inventory.transfer.cross_branch": "Şubeler arası stok transferi",
+  "inventory.usage.read": "Hasta malzeme kullanımlarını görüntüleme",
+  "inventory.usage.create": "Hasta malzeme kullanımı (taslak) oluşturma / düzenleme",
+  "inventory.usage.finalize": "Hasta malzeme kullanımını kesinleştirme (stok düşer)",
+  "inventory.usage.void": "Kesinleşmiş malzeme kullanımını geçersiz kılma (ters hareket)",
+  "inventory.low_stock.read": "Kritik stok raporunu görüntüleme",
+  "inventory.reconcile": "Stok bakiyesi doğrulama / uzlaştırma",
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;
@@ -89,6 +103,25 @@ const APPOINTMENT_FULL: Permission[] = [
   "appointment.availability.read",
 ];
 
+/** Stok yönetimi (katalog + giriş + düzeltme + şube içi transfer). */
+const INVENTORY_MANAGE: Permission[] = [
+  "inventory.read",
+  "inventory.item.create",
+  "inventory.item.update",
+  "inventory.stock.add",
+  "inventory.stock.adjust",
+  "inventory.transfer",
+  "inventory.low_stock.read",
+  "inventory.usage.read",
+];
+/** Hasta malzeme kullanımı (VOID hariç). */
+const INVENTORY_USAGE: Permission[] = [
+  "inventory.read",
+  "inventory.usage.read",
+  "inventory.usage.create",
+  "inventory.usage.finalize",
+];
+
 const ADMIN_BASE: Permission[] = [
   "clinic.read",
   "branch.read",
@@ -115,6 +148,11 @@ const ADMIN_BASE: Permission[] = [
   "service.manage",
   ...APPOINTMENT_FULL,
   "appointment.read.own",
+  ...INVENTORY_MANAGE,
+  ...INVENTORY_USAGE,
+  "inventory.transfer.cross_branch",
+  "inventory.usage.void",
+  "inventory.reconcile",
 ];
 
 export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permission[] }> = {
@@ -144,6 +182,9 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       "doctor.schedule.manage",
       "service.read",
       ...APPOINTMENT_FULL,
+      // Şube müdürü: kendi şubesinde stok + kullanım; şubeler arası transfer ve VOID YOK.
+      ...INVENTORY_MANAGE,
+      ...INVENTORY_USAGE,
     ],
   },
   // Doktor: hasta kaydı açmaz / belge imzalatmaz (resepsiyon akışı). Tıbbi notu yazabilmesi için patient.update.
@@ -166,6 +207,8 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       "appointment.start",
       "appointment.complete",
       "appointment.availability.read",
+      // Malzeme: yalnızca KENDİ randevusuna bağlı kullanım (servis, doktorun kendi kaydıyla sınırlar).
+      ...INVENTORY_USAGE,
     ],
   },
   ASSISTANT: {
@@ -183,6 +226,8 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       "service.read",
       "appointment.read",
       "appointment.availability.read",
+      ...INVENTORY_USAGE,
+      "inventory.low_stock.read",
     ],
   },
   RECEPTION: {
@@ -205,9 +250,21 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       "appointment.cancel",
       "appointment.checkin",
       "appointment.availability.read",
+      "inventory.read",
+      "inventory.low_stock.read",
     ],
   },
-  INVENTORY_MANAGER: { name: "Stok Sorumlusu", permissions: ["clinic.read", "branch.read", "room.read"] },
+  INVENTORY_MANAGER: {
+    name: "Stok Sorumlusu",
+    permissions: [
+      "clinic.read",
+      "branch.read",
+      "room.read",
+      "service.read",
+      ...INVENTORY_MANAGE,
+      "inventory.transfer.cross_branch",
+    ],
+  },
   READ_ONLY: {
     name: "Salt Okunur",
     permissions: [
@@ -217,6 +274,7 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       "doctor.read",
       "service.read",
       "appointment.read",
+      "inventory.read",
     ],
   },
 };
