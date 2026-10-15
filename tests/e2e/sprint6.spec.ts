@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { expect, test, type Browser, type Page } from "@playwright/test";
 import {
   E2E_SURNAME,
+  clearUnreadNotifications,
   EMAIL,
   PASSWORD,
   login,
@@ -72,14 +73,8 @@ async function book(page: Page, patient: string): Promise<{ url: string; slot: s
   return { url: page.url(), slot: slot.trim() };
 }
 
-/** Okunmamışları temizle (rozet yok) — sonraki artış ölçülebilsin. */
-async function clearUnread(page: Page) {
-  await bell(page).click();
-  const all = page.getByRole("button", { name: "Tümünü okundu işaretle" });
-  if (await all.isVisible()) await all.click();
-  await expect(bell(page)).toHaveAccessibleName("Bildirimler", { timeout: 10_000 });
-  await page.keyboard.press("Escape");
-}
+/** Okunmamışları temizle — ortak yardımcı (ilk yükleme yarışı giderilmiş). */
+const clearUnread = clearUnreadNotifications;
 
 async function setApprovalMode(page: Page, mode: "AUTO_ACCEPT" | "DOCTOR_APPROVAL") {
   await page.goto("/settings/clinic");

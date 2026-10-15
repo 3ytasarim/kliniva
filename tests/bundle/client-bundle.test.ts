@@ -48,6 +48,23 @@ describe("İstemci paketi (client bundle)", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("OpenAI API anahtarı (ad, değer, sk- deseni) ve istemci sırrı üretimi istemci paketinde yok", () => {
+    const key = process.env.OPENAI_API_KEY;
+    const offenders: string[] = [];
+    for (const f of files) {
+      const content = readFileSync(f, "utf8");
+      const rel = path.relative(process.cwd(), f);
+      if (content.includes("OPENAI_API_KEY")) offenders.push(`${rel}: OPENAI_API_KEY adı`);
+      if (/\bsk-(proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}/.test(content))
+        offenders.push(`${rel}: sk- anahtar deseni`);
+      if (key && key.length >= 16 && content.includes(key)) offenders.push(`${rel}: anahtar DEĞERİ`);
+      // Kısa ömürlü sır YALNIZCA sunucuda üretilir (tarayıcı yalnızca /api/v1/voice/session çağırır).
+      if (content.includes("realtime/client_secrets")) offenders.push(`${rel}: client_secrets üretimi`);
+      if (content.includes("OPENAI_REALTIME_MODEL")) offenders.push(`${rel}: sunucu model yapılandırması`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it("sunucu modülleri (argon2, pg, drizzle, şifreleme) istemci paketinde yok", () => {
     const offenders: string[] = [];
     for (const f of files) {

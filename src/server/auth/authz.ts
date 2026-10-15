@@ -20,6 +20,11 @@ export type AuthContext = {
   readonly permissions: ReadonlySet<Permission>;
   readonly branchScope: BranchScope;
   readonly meta: RequestMeta;
+  /**
+   * İsteğin kanalı — YALNIZCA sunucu atar (sesli asistan araç yürütücüsü). Audit kaynağı ve randevu kaynağı buradan
+   * türetilir; model / istemci bu alanı belirleyemez.
+   */
+  readonly channel?: "AI_VOICE";
   readonly user: { firstName: string; lastName: string; email: string; twoFactorEnabled: boolean };
 };
 
@@ -51,6 +56,10 @@ export function branchFilter(ctx: AuthContext, column: PgColumn): SQL | undefine
   return inArray(column, ids.length ? ids : ["00000000-0000-4000-8000-000000000000"]);
 }
 
-export function actorOf(ctx: AuthContext, source: AuditActor["source"] = "USER"): AuditActor {
-  return { userId: ctx.userId, source, meta: ctx.meta };
+export function actorOf(ctx: AuthContext, source?: AuditActor["source"]): AuditActor {
+  return {
+    userId: ctx.userId,
+    source: source ?? (ctx.channel === "AI_VOICE" ? "AI_VOICE" : "USER"),
+    meta: ctx.meta,
+  };
 }

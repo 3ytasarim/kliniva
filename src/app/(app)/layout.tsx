@@ -4,6 +4,7 @@ import { getClinicProfile } from "@/server/services/clinic";
 import { logoutAction } from "@/app/actions/auth";
 import { NavLink, NavSoon } from "@/components/nav-link";
 import { NotificationBell } from "@/components/notification-bell";
+import { VoiceAssistant } from "@/components/voice-assistant";
 import { Icon, type IconName } from "@/components/ui";
 import type { Permission } from "@/server/auth/permissions";
 
@@ -121,6 +122,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <main id="main" className="mx-auto w-full max-w-7xl p-4 md:p-8">
         {children}
       </main>
+      {hasPermission(ctx, "voice.use") && profile.voiceEnabled ? <VoiceAssistant /> : null}
     </div>
   );
 }

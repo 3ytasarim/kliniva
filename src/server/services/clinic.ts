@@ -47,6 +47,16 @@ export const clinicProfileSchema = z.object({
     z.number().int().min(1).max(365).optional(),
   ),
   /** Yeni randevu: AUTO_ACCEPT (doğrudan BOOKED) veya DOCTOR_APPROVAL (doktor onayı bekler, slot tutar). */
+  /** Sesli asistan: aç / kapa, gizlilik modu (varsayılan DISCREET), varsayılan dil. */
+  voiceEnabled: z.preprocess(
+    (v) => (v === undefined ? undefined : v === true || v === "true" || v === "on"),
+    z.boolean().optional(),
+  ),
+  voicePrivacyMode: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.enum(["STANDARD", "DISCREET"]).optional(),
+  ),
+  preferredVoiceLanguage: z.preprocess((v) => (v === "" ? undefined : v), z.enum(["tr", "en"]).optional()),
   appointmentApprovalMode: z.preprocess(
     (v) => (v === "" ? undefined : v),
     z.enum(["AUTO_ACCEPT", "DOCTOR_APPROVAL"]).optional(),
@@ -67,6 +77,9 @@ export type ClinicProfileView = {
   defaultAppointmentDurationMinutes: number;
   expiryWarningDays: number;
   appointmentApprovalMode: "AUTO_ACCEPT" | "DOCTOR_APPROVAL";
+  voiceEnabled: boolean;
+  voicePrivacyMode: "STANDARD" | "DISCREET";
+  preferredVoiceLanguage: string;
   hasLogo: boolean;
   updatedAt: Date | null;
 };
@@ -103,6 +116,9 @@ export async function getClinicProfile(ctx: AuthContext): Promise<ClinicProfileV
       defaultAppointmentDurationMinutes: 30,
       expiryWarningDays: 30,
       appointmentApprovalMode: "AUTO_ACCEPT",
+      voiceEnabled: true,
+      voicePrivacyMode: "DISCREET",
+      preferredVoiceLanguage: "tr",
       hasLogo: false,
       updatedAt: null,
     };
@@ -132,6 +148,9 @@ export async function upsertClinicProfile(ctx: AuthContext, input: unknown): Pro
     defaultAppointmentDurationMinutes: data.defaultAppointmentDurationMinutes ?? 30,
     expiryWarningDays: data.expiryWarningDays ?? 30,
     appointmentApprovalMode: data.appointmentApprovalMode ?? ("AUTO_ACCEPT" as const),
+    voiceEnabled: data.voiceEnabled ?? true,
+    voicePrivacyMode: data.voicePrivacyMode ?? ("DISCREET" as const),
+    preferredVoiceLanguage: data.preferredVoiceLanguage ?? "tr",
   };
   await tenantQuery(ctx, async (scope) => {
     const existing = await loadProfile(scope);

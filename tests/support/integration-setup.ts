@@ -15,3 +15,5 @@ process.env.LOG_LEVEL = "error";
 process.env.DB_POOL_MAX = "3";
 // Outbox: testler işlemciyi AÇIKÇA çağırır (commit sonrası arka plan işleme kapalı → deterministik sonuç).
 process.env.OUTBOX_AUTOPROCESS = "off";
+// Sesli asistan: CI / testler gerçek OpenAI'ye bağlanmaz (sahte taşıyıcı; ağ çağrısı yok).
+process.env.VOICE_TRANSPORT = "mock";

@@ -75,6 +75,8 @@ export const PERMISSIONS = {
   "notification.admin.read_failed_events": "Başarısız sistem olaylarını (outbox) görüntüleme",
   "appointment.approve_own": "Kendi onay bekleyen randevusunu onaylama",
   "appointment.decline_own": "Kendi onay bekleyen randevusunu reddetme",
+  // Sprint 7 — sesli asistan (araçlar ayrıca alttaki iş izinlerini uygular; ek yetki VERMEZ)
+  "voice.use": "Kliniva AI sesli asistanı kullanma",
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;
@@ -326,4 +328,6 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
 // Bildirim merkezi tüm kiracı rollerinde (platform yöneticisi hariç — kiracı verisi görmez).
 for (const [key, role] of Object.entries(SYSTEM_ROLES)) {
   if (key !== "PLATFORM_SUPER_ADMIN") role.permissions.push(...NOTIFY_OWN);
+  // Sesli asistan: yalnızca operasyon rolleri (salt okunur rol hariç). Araçlar kendi iş izinlerini ayrıca ister.
+  if (key !== "PLATFORM_SUPER_ADMIN" && key !== "READ_ONLY") role.permissions.push("voice.use");
 }

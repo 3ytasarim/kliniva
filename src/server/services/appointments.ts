@@ -230,8 +230,8 @@ export async function visibleAppointmentSummaries(
   return out;
 }
 
-const eventSource = (ctx: AuthContext): "STAFF" | "DOCTOR" =>
-  hasPermission(ctx, "appointment.read") ? "STAFF" : "DOCTOR";
+const eventSource = (ctx: AuthContext): "STAFF" | "DOCTOR" | "AI_VOICE" =>
+  ctx.channel === "AI_VOICE" ? "AI_VOICE" : hasPermission(ctx, "appointment.read") ? "STAFF" : "DOCTOR";
 
 async function addEvent(
   scope: TenantScope,
@@ -937,7 +937,10 @@ async function assertStillFree(
   if (a.roomId && hits.some((h) => h.roomId === a.roomId)) throw new AppError("ROOM_APPOINTMENT_CONFLICT");
 }
 
-export async function createAppointment(ctx: AuthContext, input: unknown): Promise<{ id: string }> {
+export async function createAppointment(
+  ctx: AuthContext,
+  input: unknown,
+): Promise<{ id: string; status: AppointmentStatus }> {
   requirePermission(ctx, "appointment.create");
   const data = parseInput(createAppointmentInput, input);
   if (!canAccessBranch(ctx, data.branchId)) throw new AppError("NOT_FOUND");
@@ -988,7 +991,8 @@ export async function createAppointment(ctx: AuthContext, input: unknown): Promi
           scheduledEnd: p.end,
           timezone: p.timezone,
           durationMinutes: p.spec.duration,
-          source: data.source,
+          // Sesli asistan kanalı sunucu bağlamından (istemci girdisinden değil).
+          source: ctx.channel === "AI_VOICE" ? "AI_VOICE" : data.source,
           notesEncrypted: data.notes ? encryptField(data.notes, notesAad(scope.tenantId, id)) : null,
           createdByUserId: ctx.userId,
         })
@@ -1018,7 +1022,7 @@ export async function createAppointment(ctx: AuthContext, input: unknown): Promi
         status === "PENDING_APPROVAL" ? "APPOINTMENT_APPROVAL_REQUESTED" : "APPOINTMENT_CREATED",
         { id, doctorId: data.doctorId, branchId: data.branchId },
       );
-      return { id };
+      return { id, status };
     });
   });
 }

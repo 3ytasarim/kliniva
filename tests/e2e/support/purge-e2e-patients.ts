@@ -86,6 +86,16 @@ async function main() {
           where tenant_id = ${t.id} and patient_id in (${list})`,
     );
     for (const d of docs.rows) for (const k of [d.p, d.s]) if (k) keys.push(k);
+    // Sprint 7: E2E randevularına bağlı sesli asistan eylemleri / günlükleri; açık kalan E2E ses oturumları kapatılır.
+    const e2eAppts = sql`(select id from kliniva.appointments where tenant_id = ${t.id} and patient_id in (${list}))`;
+    await tx.execute(
+      sql`delete from kliniva.pending_ai_actions where tenant_id = ${t.id} and result_entity_id in ${e2eAppts}`,
+    );
+    await tx.execute(sql`delete from kliniva.ai_action_logs where tenant_id = ${t.id} and entity_id in ${e2eAppts}
+      and id not in (select ai_action_log_id from kliniva.pending_ai_actions where tenant_id = ${t.id} and ai_action_log_id is not null)`);
+    await tx.execute(
+      sql`update kliniva.voice_sessions set status = 'ENDED', ended_at = now() where tenant_id = ${t.id} and status = 'ACTIVE'`,
+    );
     await tx.execute(sql`delete from kliniva.appointment_events where tenant_id = ${t.id} and appointment_id in
       (select id from kliniva.appointments where tenant_id = ${t.id} and patient_id in (${list}))`);
     await tx.execute(

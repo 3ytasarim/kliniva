@@ -161,6 +161,9 @@ export async function cleanupTenants() {
       await tx.execute(sql`delete from kliniva.notifications where tenant_id = ${id}`);
       await tx.execute(sql`delete from kliniva.notification_preferences where tenant_id = ${id}`);
       await tx.execute(sql`delete from kliniva.outbox_events where tenant_id = ${id}`);
+      await tx.execute(sql`delete from kliniva.pending_ai_actions where tenant_id = ${id}`);
+      await tx.execute(sql`delete from kliniva.ai_action_logs where tenant_id = ${id}`);
+      await tx.execute(sql`delete from kliniva.voice_sessions where tenant_id = ${id}`);
       await tx.execute(sql`delete from kliniva.patient_material_usage_allocations where tenant_id = ${id}`);
       await tx.execute(sql`delete from kliniva.patient_material_usage_items where tenant_id = ${id}`);
       await tx.execute(sql`delete from kliniva.stock_movements where tenant_id = ${id}`);

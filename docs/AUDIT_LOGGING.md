@@ -62,8 +62,11 @@
 4. **`sanitizeAuditMetadata`:** anahtar biçimi kontrol edilir; hassas görünen anahtarlarda yalnızca boolean bayrak
    kabul edilir; string değerler yalnızca `[A-Za-z0-9_.:,-]` (boşluk, `@`, Türkçe harf yok → isim/serbest metin
    geçemez) ve PII deseni içermiyorsa kabul edilir.
-5. **AI eylemleri:** `actorOf(ctx, "AI_VOICE")` ile `source = AI_VOICE` yazılır; AI, çağıran kullanıcının bağlamıyla
-   çalışır.
+5. **AI eylemleri (Sprint 7):** sesli asistan iş servislerini `ctx.channel = "AI_VOICE"` ile (yalnızca sunucu
+   ayarlar) çağırır → `actorOf` audit / randevu geçmişi / randevu `source` alanına `AI_VOICE` yazar. AI, çağıran
+   kullanıcının bağlamı, yetkisi ve RLS kapsamıyla çalışır. Ayrıca her yazma aracı `ai_action_logs` satırı üretir
+   (REQUESTED → SUCCEEDED / FAILED / CANCELLED; onaylı mı; varlık kimliği); hasta adı, telefon, döküm, ses, iptal
+   gerekçesi bu günlüğe YAZILMAZ. Ayrıntı: `docs/VOICE.md`.
 
 ## Okuma
 

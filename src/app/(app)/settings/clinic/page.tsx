@@ -99,6 +99,33 @@ export default async function ClinicSettingsPage() {
               },
             ]}
           />
+          <SelectField
+            label="Kliniva AI sesli asistan"
+            name="voiceEnabled"
+            defaultValue={p.voiceEnabled ? "true" : "false"}
+            options={[
+              { value: "true", label: "Açık" },
+              { value: "false", label: "Kapalı" },
+            ]}
+          />
+          <SelectField
+            label="Sesli asistan gizlilik modu"
+            name="voicePrivacyMode"
+            defaultValue={p.voicePrivacyMode}
+            options={[
+              { value: "DISCREET", label: "Ölçülü (hasta adlarını mümkün olduğunca söylemez)" },
+              { value: "STANDARD", label: "Standart (yetkili kullanıcıya operasyon bilgisi)" },
+            ]}
+          />
+          <SelectField
+            label="Sesli asistan varsayılan dili"
+            name="preferredVoiceLanguage"
+            defaultValue={p.preferredVoiceLanguage}
+            options={[
+              { value: "tr", label: "Türkçe" },
+              { value: "en", label: "English" },
+            ]}
+          />
           <input type="hidden" name="country" value={p.country} />
         </ActionForm>
       </div>

@@ -25,6 +25,8 @@ export default defineConfig({
     command: `npx next start -p ${PORT}`,
     url: `http://localhost:${PORT}/login`,
     reuseExistingServer: false,
+    // Sesli asistan E2E: sahte taşıyıcı (OpenAI ağ çağrısı / mikrofon yok); üretimde bu değişken TANIMSIZ.
+    env: { VOICE_TRANSPORT: "mock" },
     timeout: 60_000,
   },
 });

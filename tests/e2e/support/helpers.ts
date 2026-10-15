@@ -81,3 +81,24 @@ export async function noOverflow(page: Page, where: string) {
   });
   expect(offenders, `yatay taşma: ${where}`).toEqual([]);
 }
+
+/**
+ * Okunmamış bildirimleri temizler (rozet yok) — sonraki artış TAM sayıyla ölçülebilsin.
+ * Zil ilk listesi gelene kadar 0 gösterir; karar ondan önce verilirse önceki testten kalan okunmamış bildirim
+ * "temizlenmiş" sanılır (yarış). Bu yüzden önce gerçek sayı API'den okunur ve zilin onu göstermesi beklenir.
+ */
+export async function clearUnreadNotifications(page: Page) {
+  const bell = page.getByRole("button", { name: /^Bildirimler/ });
+  const res = await page.request.get("/api/v1/notifications?limit=1");
+  expect(res.ok()).toBe(true);
+  const { unread } = (await res.json()) as { unread: number };
+  if (unread > 0) {
+    await expect(bell).toHaveAccessibleName(`Bildirimler (${unread} okunmamış)`, { timeout: 15_000 });
+    await bell.click();
+    await page.getByRole("button", { name: "Tümünü okundu işaretle" }).click();
+  } else {
+    await bell.click();
+  }
+  await expect(bell).toHaveAccessibleName("Bildirimler", { timeout: 10_000 });
+  await page.keyboard.press("Escape");
+}

@@ -50,36 +50,41 @@
 | `0013_inventory_lots_security.sql` | Defter tetikleyicisi lot önbelleği (koşullu düşüm), lot koruma (lot zorunluluğu, SKT / geri çağırma / pasif reddi, transfer kimliği), `lot_expired()` (şube saat dilimi), lot satırı koruması (kimlik değişmez, geri çağırma geri alınamaz), `recompute_stock_lot`, tahsis koruması (yalnızca DRAFT), RLS ENABLE+FORCE, sütun düzeyi yetkiler |
 | `0014_notifications_outbox.sql`    | Sprint 6: `notifications`, `notification_preferences`, `outbox_events`, 4 enum, `appointment_approval_mode`, `approval_expires_at`; `appointment_status` + `PENDING_APPROVAL` (tip yeniden oluşturularak — ADD VALUE aynı transaction'da kullanılamadığı için)                                                                                |
 | `0015_notifications_security.sql`  | Durum makinesi + çakışma constraint'ları `PENDING_APPROVAL` ile, bildirim / outbox koruma tetikleyicileri, `outbox_ready_tenants()` (yalnızca kiracı kimliği), 3 tabloda RLS ENABLE+FORCE, sütun düzeyi yetkiler                                                                                                                              |
+| `0016_voice_assistant.sql`         | Sprint 7: `voice_sessions`, `ai_action_logs`, `pending_ai_actions`, 4 enum, `clinic_profiles.voice_enabled` / `voice_privacy_mode` / `preferred_voice_language`                                                                                                                                                                               |
+| `0017_voice_security.sql`          | Etkin idempotency kısmi benzersiz indeksi, bekleyen eylem / AI günlüğü / ses oturumu koruma tetikleyicileri (kimlik + girdi + özet değişmez, durum makinesi, son durumlar değişmez, silme yalnızca imha), 3 tabloda RLS ENABLE+FORCE, sütun düzeyi yetkiler                                                                                   |
 | `0001_security.sql`                |                                                                                                                                                                                                                                                                                                                                               | RLS (ENABLE + FORCE) ve politikalar; `audit_logs`, `document_templates`, `patient_documents`, `consent_choices` koruma tetikleyicileri; `current_tenant_id()`, `retention_purge_enabled()` |
 
 ## Tablolar
 
-| Tablo                                                     | Kapsam                    | RLS                                                                              |
-| --------------------------------------------------------- | ------------------------- | -------------------------------------------------------------------------------- |
-| `tenants`                                                 | Platform                  | —                                                                                |
-| `permissions`, `role_permissions`                         | Platform                  | —                                                                                |
-| `roles`                                                   | Platform (NULL) + kiracı  | Okuma: platform+kiracı · Yazma: kiracı / `platform_seed`                         |
-| `sessions`                                                | Platform (token özetiyle) | —                                                                                |
-| `rate_limits`                                             | Platform                  | —                                                                                |
-| `branches`, `rooms`, `users`, `user_roles`                | Kiracı                    | FORCE                                                                            |
-| `patients`                                                | Kiracı                    | FORCE                                                                            |
-| `audit_logs`                                              | Kiracı                    | FORCE + append-only                                                              |
-| `document_templates`                                      | Platform (NULL) + kiracı  | Okuma: platform+kiracı · Yazma: kiracı / `platform_seed`                         |
-| `patient_documents`, `consent_choices`                    | Kiracı                    | FORCE + imza sonrası değişmez                                                    |
-| `patient_branches`                                        | Kiracı (hasta ↔ şube)     | FORCE · şube kapsamı buradan hesaplanır                                          |
-| `consent_revocations`                                     | Kiracı                    | FORCE + yalnızca ekleme                                                          |
-| `clinical_services`, `doctor_services`                    | Kiracı                    | FORCE                                                                            |
-| `appointments`                                            | Kiracı                    | FORCE + çakışma constraint'ları + durum tetikleyicisi                            |
-| `appointment_events`                                      | Kiracı                    | FORCE + yalnızca ekleme                                                          |
-| `inventory_*`, `stock_lots`, `service_material_templates` | Kiracı                    | FORCE                                                                            |
-| `stock_movements`                                         | Kiracı                    | FORCE + yalnızca ekleme (defter)                                                 |
-| `stock_balances`                                          | Kiracı                    | FORCE + uygulama yalnızca okur (tetikleyici yazar)                               |
-| `patient_material_usages` / `_items`                      | Kiracı                    | FORCE + durum makinesi / DRAFT dışı değişmez                                     |
-| `patient_material_usage_allocations`                      | Kiracı                    | FORCE + yalnızca DRAFT iken değişir; bileşik FK (kalem + lot aynı ürün/lokasyon) |
-| `notifications` (Sprint 6)                                | Kiracı + alıcı (servis)   | FORCE + içerik değişmez; yalnızca durum sütunları güncellenir; silinmez          |
-| `notification_preferences`                                | Kiracı                    | FORCE; silinmez                                                                  |
-| `outbox_events`                                           | Kiracı                    | FORCE + yük değişmez; yalnızca durum / deneme sütunları; silinmez                |
-| `stock_lots` (Sprint 5)                                   |                           | Kiracı                                                                           | FORCE + `quantity` / `lot_number` uygulama rolünce yazılamaz (sütun yetkisi); silinemez |
+| Tablo                                                     | Kapsam                      | RLS                                                                                                |
+| --------------------------------------------------------- | --------------------------- | -------------------------------------------------------------------------------------------------- |
+| `tenants`                                                 | Platform                    | —                                                                                                  |
+| `permissions`, `role_permissions`                         | Platform                    | —                                                                                                  |
+| `roles`                                                   | Platform (NULL) + kiracı    | Okuma: platform+kiracı · Yazma: kiracı / `platform_seed`                                           |
+| `sessions`                                                | Platform (token özetiyle)   | —                                                                                                  |
+| `rate_limits`                                             | Platform                    | —                                                                                                  |
+| `branches`, `rooms`, `users`, `user_roles`                | Kiracı                      | FORCE                                                                                              |
+| `patients`                                                | Kiracı                      | FORCE                                                                                              |
+| `audit_logs`                                              | Kiracı                      | FORCE + append-only                                                                                |
+| `document_templates`                                      | Platform (NULL) + kiracı    | Okuma: platform+kiracı · Yazma: kiracı / `platform_seed`                                           |
+| `patient_documents`, `consent_choices`                    | Kiracı                      | FORCE + imza sonrası değişmez                                                                      |
+| `patient_branches`                                        | Kiracı (hasta ↔ şube)       | FORCE · şube kapsamı buradan hesaplanır                                                            |
+| `consent_revocations`                                     | Kiracı                      | FORCE + yalnızca ekleme                                                                            |
+| `clinical_services`, `doctor_services`                    | Kiracı                      | FORCE                                                                                              |
+| `appointments`                                            | Kiracı                      | FORCE + çakışma constraint'ları + durum tetikleyicisi                                              |
+| `appointment_events`                                      | Kiracı                      | FORCE + yalnızca ekleme                                                                            |
+| `inventory_*`, `stock_lots`, `service_material_templates` | Kiracı                      | FORCE                                                                                              |
+| `stock_movements`                                         | Kiracı                      | FORCE + yalnızca ekleme (defter)                                                                   |
+| `stock_balances`                                          | Kiracı                      | FORCE + uygulama yalnızca okur (tetikleyici yazar)                                                 |
+| `patient_material_usages` / `_items`                      | Kiracı                      | FORCE + durum makinesi / DRAFT dışı değişmez                                                       |
+| `patient_material_usage_allocations`                      | Kiracı                      | FORCE + yalnızca DRAFT iken değişir; bileşik FK (kalem + lot aynı ürün/lokasyon)                   |
+| `notifications` (Sprint 6)                                | Kiracı + alıcı (servis)     | FORCE + içerik değişmez; yalnızca durum sütunları güncellenir; silinmez                            |
+| `notification_preferences`                                | Kiracı                      | FORCE; silinmez                                                                                    |
+| `outbox_events`                                           | Kiracı                      | FORCE + yük değişmez; yalnızca durum / deneme sütunları; silinmez                                  |
+| `voice_sessions` (Sprint 7)                               | Kiracı + kullanıcı (servis) | FORCE; yalnızca durum / bitiş / dil güncellenir; istemci sırrı, ses, döküm SAKLANMAZ               |
+| `pending_ai_actions`                                      | Kiracı + kullanıcı + oturum | FORCE; girdi AES-GCM şifreli + SHA-256 özet, değişmez; PENDING→CONFIRMED→EXECUTED/FAILED; silinmez |
+| `ai_action_logs`                                          | Kiracı                      | FORCE; araç adı / tip / varlık kimliği / güvenli meta — PII yok; son durumlar değişmez; silinmez   |
+| `stock_lots` (Sprint 5)                                   |                             | Kiracı                                                                                             | FORCE + `quantity` / `lot_number` uygulama rolünce yazılamaz (sütun yetkisi); silinemez |
 
 ## Oturum değişkenleri (transaction'a yerel)
 

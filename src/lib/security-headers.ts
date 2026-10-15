@@ -9,7 +9,9 @@ export function buildCsp(nonce: string, opts: { dev: boolean }): string {
     `style-src 'self'${opts.dev ? " 'unsafe-inline'" : ` 'nonce-${nonce}'`}`,
     "img-src 'self' blob: data:",
     "font-src 'self'",
-    "connect-src 'self'",
+    // Sesli asistan: tarayıcı kısa ömürlü istemci sırrıyla OpenAI Realtime SDP uç noktasına bağlanır (yalnızca bu
+    // origin). WebRTC medya akışı connect-src kapsamında değildir; unsafe-eval / unsafe-inline EKLENMEZ.
+    "connect-src 'self' https://api.openai.com",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
@@ -30,10 +32,9 @@ export function staticSecurityHeaders(opts: { production: boolean }): { key: str
     { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
     {
       key: "Permissions-Policy",
-      // Tablet imza alanı ve ileride sesli asistan için mikrofon yalnızca kendi origin'imize açılabilir;
-      // Sprint 0'da kapalı.
+      // Mikrofon YALNIZCA kendi origin'imize (sesli asistan; iframe'ler mikrofon isteyemez). Kamera vb. kapalı.
       value:
-        "camera=(), microphone=(), geolocation=(), payment=(), usb=(), bluetooth=(), magnetometer=(), gyroscope=(), accelerometer=(), interest-cohort=()",
+        "camera=(), microphone=(self), geolocation=(), payment=(), usb=(), bluetooth=(), magnetometer=(), gyroscope=(), accelerometer=(), interest-cohort=()",
     },
     { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
     { key: "Cross-Origin-Resource-Policy", value: "same-origin" },

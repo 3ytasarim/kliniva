@@ -25,7 +25,10 @@ export type AppErrorCode =
   | "LOT_EXPIRED"
   | "LOT_RECALLED"
   | "TRACKING_MODE_CHANGE_REQUIRES_MIGRATION"
-  | "LOT_TRACKING_ALREADY_IN_USE";
+  | "LOT_TRACKING_ALREADY_IN_USE"
+  | "VOICE_SESSION_LIMIT"
+  | "VOICE_UNAVAILABLE"
+  | "VOICE_DISABLED";
 
 const STATUS: Record<AppErrorCode, number> = {
   UNAUTHENTICATED: 401,
@@ -51,6 +54,9 @@ const STATUS: Record<AppErrorCode, number> = {
   LOT_RECALLED: 409,
   TRACKING_MODE_CHANGE_REQUIRES_MIGRATION: 409,
   LOT_TRACKING_ALREADY_IN_USE: 409,
+  VOICE_SESSION_LIMIT: 429,
+  VOICE_UNAVAILABLE: 503,
+  VOICE_DISABLED: 403,
 };
 
 const MESSAGES: Record<AppErrorCode, string> = {
@@ -78,6 +84,9 @@ const MESSAGES: Record<AppErrorCode, string> = {
   TRACKING_MODE_CHANGE_REQUIRES_MIGRATION:
     "Stoğu olan üründe lot takibi açılamaz. Önce fiziksel sayım ile stoğu sıfırlayıp lotlu giriş yapın.",
   LOT_TRACKING_ALREADY_IN_USE: "Lot geçmişi olan üründe lot / SKT takibi kapatılamaz.",
+  VOICE_SESSION_LIMIT: "Çok fazla açık sesli asistan oturumu var. Diğer oturumları kapatıp tekrar deneyin.",
+  VOICE_UNAVAILABLE: "Sesli asistan şu anda kullanılamıyor.",
+  VOICE_DISABLED: "Sesli asistan bu klinikte kapalı.",
 };
 
 export class AppError extends Error {

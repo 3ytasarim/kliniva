@@ -489,6 +489,9 @@ export const appointmentApprovalMode = kliniva.enum("appointment_approval_mode",
   "DOCTOR_APPROVAL",
 ]);
 
+/** Sesli asistan gizlilik modu: DISCREET (varsayılan) sesli yanıtta hasta adını mümkün olduğunca söylemez. */
+export const voicePrivacyMode = kliniva.enum("voice_privacy_mode", ["STANDARD", "DISCREET"]);
+
 export const clinicProfiles = kliniva.table(
   "clinic_profiles",
   {
@@ -527,6 +530,11 @@ export const clinicProfiles = kliniva.table(
     appointmentApprovalMode: appointmentApprovalMode("appointment_approval_mode")
       .notNull()
       .default("AUTO_ACCEPT"),
+    /** Kliniva AI sesli asistan (sunucuda OPENAI_API_KEY de gerekir). */
+    voiceEnabled: boolean("voice_enabled").notNull().default(true),
+    voicePrivacyMode: voicePrivacyMode("voice_privacy_mode").notNull().default("DISCREET"),
+    /** "tr" | "en" — oturum içinde kullanıcı dili değiştirebilir. */
+    preferredVoiceLanguage: text("preferred_voice_language").notNull().default("tr"),
     active: boolean("active").notNull().default(true),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -539,6 +547,7 @@ export const clinicProfiles = kliniva.table(
     check("clinic_profiles_slot_ck", sql`${t.slotIntervalMinutes} in (5, 10, 15, 20, 30, 60)`),
     check("clinic_profiles_negative_stock_ck", sql`${t.allowNegativeStock} = false`),
     check("clinic_profiles_expiry_warning_ck", sql`${t.expiryWarningDays} between 1 and 365`),
+    check("clinic_profiles_voice_language_ck", sql`${t.preferredVoiceLanguage} in ('tr', 'en')`),
   ],
 );
 
@@ -1625,5 +1634,160 @@ export const outboxEvents = kliniva.table(
     ),
     index("outbox_events_ready_idx").on(t.status, t.availableAt),
     index("outbox_events_tenant_status_idx").on(t.tenantId, t.status, t.availableAt),
+  ],
+);
+
+// ---------------------------------------------------------------- Sprint 7: Kliniva AI sesli asistan
+
+export const voiceSessionStatus = kliniva.enum("voice_session_status", [
+  "ACTIVE",
+  "ENDED",
+  "EXPIRED",
+  "FAILED",
+]);
+export const aiActionStatus = kliniva.enum("ai_action_status", [
+  "REQUESTED",
+  "CONFIRMED",
+  "SUCCEEDED",
+  "FAILED",
+  "CANCELLED",
+]);
+export const pendingAiActionStatus = kliniva.enum("pending_ai_action_status", [
+  "PENDING",
+  "CONFIRMED",
+  "EXECUTED",
+  "FAILED",
+  "EXPIRED",
+  "CANCELLED",
+]);
+
+/**
+ * [INTERNAL] Sesli asistan oturumu — Kliniva oturumuna bağlı (kiracı + kullanıcı SUNUCUDAN). Ham ses / tam döküm
+ * SAKLANMAZ. client_session_id yalnızca sağlayıcı oturum kimliği (sır değil); istemci sırrı hiç saklanmaz.
+ */
+export const voiceSessions = kliniva.table(
+  "voice_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    userId: uuid("user_id").notNull(),
+    status: voiceSessionStatus("status").notNull().default("ACTIVE"),
+    language: text("language").notNull().default("tr"),
+    transport: text("transport").notNull().default("openai"),
+    clientSessionId: text("client_session_id"),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: "voice_sessions_user_fk",
+      columns: [t.tenantId, t.userId],
+      foreignColumns: [users.tenantId, users.id],
+    }).onDelete("cascade"),
+    unique("voice_sessions_tenant_id_uq").on(t.tenantId, t.id),
+    unique("voice_sessions_tenant_id_user_uq").on(t.tenantId, t.id, t.userId),
+    check("voice_sessions_language_ck", sql`${t.language} in ('tr', 'en')`),
+    check("voice_sessions_transport_ck", sql`${t.transport} in ('openai', 'mock')`),
+    check(
+      "voice_sessions_client_id_ck",
+      sql`${t.clientSessionId} is null or length(${t.clientSessionId}) <= 120`,
+    ),
+    index("voice_sessions_user_active_idx").on(t.tenantId, t.userId, t.status),
+  ],
+);
+
+/**
+ * [INTERNAL] AI eylem günlüğü — her YAZMA aracı için güvenli kayıt. Hasta adı, telefon, döküm, ses, sağlık verisi
+ * YOK; yalnızca araç adı, eylem tipi, varlık kimliği ve güvenli meta veri. Son durumlar değişmez (tetikleyici).
+ */
+export const aiActionLogs = kliniva.table(
+  "ai_action_logs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    userId: uuid("user_id").notNull(),
+    voiceSessionId: uuid("voice_session_id"),
+    toolName: text("tool_name").notNull(),
+    actionType: text("action_type").notNull(),
+    entityType: text("entity_type"),
+    entityId: uuid("entity_id"),
+    status: aiActionStatus("status").notNull().default("REQUESTED"),
+    confirmationRequired: boolean("confirmation_required").notNull().default(true),
+    confirmed: boolean("confirmed").notNull().default(false),
+    safeMetadata: jsonb("safe_metadata").$type<Record<string, string | number | boolean | null>>(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: "ai_action_logs_user_fk",
+      columns: [t.tenantId, t.userId],
+      foreignColumns: [users.tenantId, users.id],
+    }),
+    foreignKey({
+      name: "ai_action_logs_session_fk",
+      columns: [t.tenantId, t.voiceSessionId, t.userId],
+      foreignColumns: [voiceSessions.tenantId, voiceSessions.id, voiceSessions.userId],
+    }),
+    unique("ai_action_logs_tenant_id_uq").on(t.tenantId, t.id),
+    check("ai_action_logs_tool_ck", sql`${t.toolName} ~ '^voice_[a-z_]{2,60}$'`),
+    check("ai_action_logs_action_type_ck", sql`${t.actionType} in ('READ', 'WRITE')`),
+    check(
+      "ai_action_logs_entity_type_ck",
+      sql`${t.entityType} is null or ${t.entityType} ~ '^[a-z_]{1,40}$'`,
+    ),
+    index("ai_action_logs_tenant_created_idx").on(t.tenantId, t.createdAt),
+    index("ai_action_logs_session_idx").on(t.tenantId, t.voiceSessionId),
+  ],
+);
+
+/**
+ * [INTERNAL] Onay bekleyen AI yazma eylemi. Girdi sunucuda doğrulanır, ŞİFRELİ saklanır (model sonradan
+ * değiştiremez; onay yalnızca eylem kimliğine), bütünlüğü safe_input_hash ile kontrol edilir. Onay AYNI kullanıcı +
+ * AYNI ses oturumu + süresi dolmamış eylemle sınırlıdır. idempotency_key: aynı oturumda aynı araç + aynı girdi →
+ * etkin (PENDING / CONFIRMED / EXECUTED) tek kayıt (kısmi benzersiz indeks, migration'da).
+ */
+export const pendingAiActions = kliniva.table(
+  "pending_ai_actions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    userId: uuid("user_id").notNull(),
+    voiceSessionId: uuid("voice_session_id").notNull(),
+    toolName: text("tool_name").notNull(),
+    safeInputHash: text("safe_input_hash").notNull(),
+    inputEncrypted: text("input_encrypted").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    aiActionLogId: uuid("ai_action_log_id"),
+    status: pendingAiActionStatus("status").notNull().default("PENDING"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+    executedAt: timestamp("executed_at", { withTimezone: true }),
+    resultEntityId: uuid("result_entity_id"),
+    resultCode: text("result_code"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: "pending_ai_actions_session_fk",
+      columns: [t.tenantId, t.voiceSessionId, t.userId],
+      foreignColumns: [voiceSessions.tenantId, voiceSessions.id, voiceSessions.userId],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "pending_ai_actions_log_fk",
+      columns: [t.tenantId, t.aiActionLogId],
+      foreignColumns: [aiActionLogs.tenantId, aiActionLogs.id],
+    }),
+    check("pending_ai_actions_tool_ck", sql`${t.toolName} ~ '^voice_[a-z_]{2,60}$'`),
+    check("pending_ai_actions_hash_ck", sql`${t.safeInputHash} ~ '^[0-9a-f]{64}$'`),
+    check("pending_ai_actions_key_ck", sql`${t.idempotencyKey} ~ '^[0-9a-f]{64}$'`),
+    check(
+      "pending_ai_actions_result_ck",
+      sql`${t.resultCode} is null or ${t.resultCode} ~ '^[A-Z0-9_]{1,60}$'`,
+    ),
+    index("pending_ai_actions_session_idx").on(t.tenantId, t.voiceSessionId, t.status),
   ],
 );

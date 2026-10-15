@@ -62,7 +62,15 @@ Uygulama içi bildirimler (zil + sayfa + tercihler), transactional outbox (SKIP 
 başarısız olay ekranı), SSE gerçek zamanlı akış, Bugünkü operasyon ekranı, doktor onay modu (PENDING_APPROVAL slot
 tutar), stok eşik / SKT / geri çağırma / belge bütünlüğü uyarıları. Ayrıntı: `docs/NOTIFICATIONS.md`.
 
-## Sprint 7+ (öneri)
+## Sprint 7 — Kliniva AI sesli asistan ✅
 
-Voice AI (yetki kontrollü araçlar, `source = AI_VOICE`), raporlama, KVKK m.11 bilgi talebi
+OpenAI Realtime (WebRTC) üzerinden Türkçe sesli klinik operasyon asistanı: sunucuda kısa ömürlü istemci sırrı (ana
+anahtar tarayıcıya gitmez), 19 dar kapsamlı araç (mevcut servisler, mevcut RBAC / RLS / şube / doktor kapsamı), açık
+onaylı yazma eylemleri (PendingAIAction: 2 dk, aynı kullanıcı + oturum, şifreli + özetli değişmez girdi,
+idempotency), `AI_VOICE` kaynaklı audit, ölçülü gizlilik modu, tıbbi karar sınırı, sahte taşıyıcı + metin düzeneği.
+Ayrıntı: `docs/VOICE.md`.
+
+## Sprint 8+ (öneri)
+
+Gerçek OpenAI anahtarıyla saha doğrulaması (WebRTC, barge-in, gürültü), raporlama, KVKK m.11 bilgi talebi
 dışa aktarımı ve düzeltme akışı, MFA zorunluluğu, orphan depo nesnesi temizliği.

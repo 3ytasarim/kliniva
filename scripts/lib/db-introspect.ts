@@ -50,6 +50,9 @@ export const EXPECTED_TABLES = [
   "notifications",
   "notification_preferences",
   "outbox_events",
+  "voice_sessions",
+  "ai_action_logs",
+  "pending_ai_actions",
 ] as const;
 
 /** RLS (ENABLE + FORCE) zorunlu tablolar: kiracı tabloları + platform/kiracı karışık tablolar. */
@@ -91,6 +94,9 @@ export const RLS_TABLES = [
   "notifications",
   "notification_preferences",
   "outbox_events",
+  "voice_sessions",
+  "ai_action_logs",
+  "pending_ai_actions",
 ] as const;
 
 /** Uygulama rolünün tablo bazında OLMASI GEREKEN yetkiler (fazlası da eksiği de hata). */
@@ -144,6 +150,10 @@ export const APP_PRIVILEGES: Record<string, string[]> = {
   notifications: ["INSERT", "SELECT"],
   notification_preferences: ["INSERT", "SELECT"],
   outbox_events: ["INSERT", "SELECT"],
+  // Sprint 7: yalnızca durum sütunları güncellenebilir; DELETE yok
+  voice_sessions: ["INSERT", "SELECT"],
+  ai_action_logs: ["INSERT", "SELECT"],
+  pending_ai_actions: ["INSERT", "SELECT"],
 };
 
 export function isPoolerUrl(url: string | undefined): boolean | null {
@@ -361,6 +371,24 @@ export async function checkAppRole(c: ClientBase, role = APP_ROLE): Promise<AppR
     if (n6.n_recipient) mismatches.push("notifications.recipient_user_id: gereksiz UPDATE");
     if (!n6.o_status) mismatches.push("outbox_events.status: UPDATE yok");
     if (n6.o_payload) mismatches.push("outbox_events.payload_safe: gereksiz UPDATE");
+  }
+  // AI eylemi: girdi / özet / oturum sütunları uygulama rolünce değiştirilemez.
+  const s7 = await c
+    .query(
+      `select to_regclass('kliniva.pending_ai_actions') is not null as e,
+              has_column_privilege($1, 'kliniva.pending_ai_actions', 'input_encrypted', 'UPDATE') as p_input,
+              has_column_privilege($1, 'kliniva.pending_ai_actions', 'safe_input_hash', 'UPDATE') as p_hash,
+              has_column_privilege($1, 'kliniva.pending_ai_actions', 'status', 'UPDATE') as p_status,
+              has_column_privilege($1, 'kliniva.ai_action_logs', 'tool_name', 'UPDATE') as l_tool`,
+      [role],
+    )
+    .catch(() => ({ rows: [{ e: false }] as Record<string, boolean>[] }));
+  const n7 = s7.rows[0];
+  if (n7?.e) {
+    if (n7.p_input) mismatches.push("pending_ai_actions.input_encrypted: gereksiz UPDATE");
+    if (n7.p_hash) mismatches.push("pending_ai_actions.safe_input_hash: gereksiz UPDATE");
+    if (!n7.p_status) mismatches.push("pending_ai_actions.status: UPDATE yok");
+    if (n7.l_tool) mismatches.push("ai_action_logs.tool_name: gereksiz UPDATE");
   }
   return {
     exists: true,
