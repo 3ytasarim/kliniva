@@ -46,6 +46,7 @@ export const EXPECTED_TABLES = [
   "stock_balances",
   "stock_lots",
   "stock_movements",
+  "patient_material_usage_allocations",
 ] as const;
 
 /** RLS (ENABLE + FORCE) zorunlu tablolar: kiracı tabloları + platform/kiracı karışık tablolar. */
@@ -83,6 +84,7 @@ export const RLS_TABLES = [
   "stock_balances",
   "stock_lots",
   "stock_movements",
+  "patient_material_usage_allocations",
 ] as const;
 
 /** Uygulama rolünün tablo bazında OLMASI GEREKEN yetkiler (fazlası da eksiği de hata). */
@@ -124,12 +126,14 @@ export const APP_PRIVILEGES: Record<string, string[]> = {
   inventory_categories: ["INSERT", "SELECT", "UPDATE"],
   inventory_items: ["INSERT", "SELECT", "UPDATE"],
   inventory_locations: ["INSERT", "SELECT", "UPDATE"],
-  stock_lots: ["INSERT", "SELECT", "UPDATE"],
+  // Sprint 5: lot satırında tablo düzeyi UPDATE yok — yalnızca meta veri / geri çağırma sütunları (aşağıda)
+  stock_lots: ["INSERT", "SELECT"],
   patient_material_usages: ["INSERT", "SELECT", "UPDATE"],
   stock_balances: ["SELECT"],
   stock_movements: ["INSERT", "SELECT"],
   patient_material_usage_items: ["DELETE", "INSERT", "SELECT", "UPDATE"],
   service_material_templates: ["DELETE", "INSERT", "SELECT", "UPDATE"],
+  patient_material_usage_allocations: ["DELETE", "INSERT", "SELECT", "UPDATE"],
 };
 
 export function isPoolerUrl(url: string | undefined): boolean | null {
@@ -311,6 +315,22 @@ export async function checkAppRole(c: ClientBase, role = APP_ROLE): Promise<AppR
     )
     .catch(() => ({ rows: [{ seq: false, name: false }] }));
   if (!seqUpd.rows[0]?.seq) mismatches.push("tenants.patient_seq: UPDATE yok");
+  // Lot bakiyesi yalnızca defter tetikleyicisiyle değişir: miktar / numara sütunlarına UPDATE OLMAMALI.
+  const lotCols = await c
+    .query(
+      `select to_regclass('kliniva.stock_lots') is not null as e,
+              has_column_privilege($1, 'kliniva.stock_lots', 'quantity', 'UPDATE') as qty,
+              has_column_privilege($1, 'kliniva.stock_lots', 'lot_number', 'UPDATE') as num,
+              has_column_privilege($1, 'kliniva.stock_lots', 'recalled_at', 'UPDATE') as rec`,
+      [role],
+    )
+    .catch(() => ({ rows: [{ e: false, qty: false, num: false, rec: true }] }));
+  const lc = lotCols.rows[0];
+  if (lc?.e) {
+    if (lc.qty) mismatches.push("stock_lots.quantity: gereksiz UPDATE");
+    if (lc.num) mismatches.push("stock_lots.lot_number: gereksiz UPDATE");
+    if (!lc.rec) mismatches.push("stock_lots.recalled_at: UPDATE yok");
+  }
   if (seqUpd.rows[0]?.name) mismatches.push("tenants.name: gereksiz UPDATE");
   return {
     exists: true,

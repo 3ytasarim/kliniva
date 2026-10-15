@@ -78,6 +78,27 @@
       "when": 1792067406572,
       "tag": "0010_inventory_security",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792074193766,
+      "tag": "0011_inventory_lots",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1792074203113,
+      "tag": "0012_inventory_lot_movements",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1792074225728,
+      "tag": "0013_inventory_lots_security",
+      "breakpoints": true
     }
   ]
 }

@@ -42,7 +42,15 @@ const base: SignedDocumentEvidence = {
   contentSha256: "b1c2d3e4f5a6b7c8".padEnd(64, "0"),
 };
 
-async function inspect(pdf: Buffer) {
+/** Ortak imza görüntüsü (her testte yeniden üretilmez). */
+const SIG = makePng(320, 120);
+
+/**
+ * pdfjs ile sayfa metni (+ istenirse görüntü sayısı). Görüntü sayımı için operatör listesi gerekir; yalnızca metin
+ * doğrulayan testler `images: false` ile bu ek ayrıştırmayı atlar.
+ */
+async function inspect(pdf: Buffer, opts: { images?: boolean } = {}) {
+  const withImages = opts.images ?? true;
   const doc = await getDocument({
     data: new Uint8Array(pdf),
     disableFontFace: true,
@@ -56,10 +64,11 @@ async function inspect(pdf: Buffer) {
       .map((it) => ("str" in it ? it.str : ""))
       .join(" ")
       .replace(/\s+/g, " ");
-    const ops = await page.getOperatorList();
-    const images = ops.fnArray.filter(
-      (f) => f === OPS.paintImageXObject || f === OPS.paintInlineImageXObject,
-    ).length;
+    const images = withImages
+      ? (await page.getOperatorList()).fnArray.filter(
+          (f) => f === OPS.paintImageXObject || f === OPS.paintInlineImageXObject,
+        ).length
+      : 0;
     pages.push({ text, images });
   }
   await doc.destroy();
@@ -76,8 +85,8 @@ function assertNoOverlap(layout: PdfLayout) {
 
 describe("PDF v2 — içerik", () => {
   it("klinik, şube, hasta, numara, başlık, sürüm, imzalayan, tarih, belge ID ve Türkçe karakterler metinde", async () => {
-    const { pdf, layout } = await renderSignedDocumentPdfWithLayout(base, makePng(320, 120));
-    const pages = await inspect(pdf);
+    const { pdf, layout } = await renderSignedDocumentPdfWithLayout(base, SIG);
+    const pages = await inspect(pdf, { images: false });
     const all = pages.map((p) => p.text).join(" ");
     for (const needle of [
       "Örnek Işık Ağız ve Diş Sağlığı Polikliniği",
@@ -110,9 +119,9 @@ describe("PDF v2 — içerik", () => {
         guardianName: "Mehmet Yılmaz",
         guardianRelationship: "Baba",
       },
-      makePng(320, 120),
+      SIG,
     );
-    const all = (await inspect(pdf)).map((p) => p.text).join(" ");
+    const all = (await inspect(pdf, { images: false })).map((p) => p.text).join(" ");
     expect(all).toContain("Mehmet Yılmaz");
     expect(all).toContain("Baba");
     expect(all).toContain("Veli");
@@ -131,38 +140,52 @@ describe("PDF v2 — yerleşim", () => {
     kind: "CONSENT" as const,
     value: i % 2 ? "DENIED" : "GRANTED",
   }));
-
-  it("uzun metin çok sayfaya bölünür; her sayfada header ve footer, 'Sayfa X / Y' doğru", async () => {
-    const { pdf, layout } = await renderSignedDocumentPdfWithLayout(
+  /**
+   * Uzun belge (çok sayfa) iki testte AYNI girdiyle kullanılır → bir kez render edilir, sonuç paylaşılır. Render
+   * doğası gereği ağırdır (satır kırma için yüzlerce font ölçümü): ilgili testlere özel 15 sn zaman aşımı verilir;
+   * global zaman aşımı değişmez.
+   */
+  let longDoc: ReturnType<typeof renderSignedDocumentPdfWithLayout> | undefined;
+  const renderLongDoc = () =>
+    (longDoc ??= renderSignedDocumentPdfWithLayout(
       { ...base, content: longContent, choices: manyChoices },
-      makePng(320, 120),
-    );
-    expect(layout.pageCount).toBeGreaterThan(2);
-    const pages = await inspect(pdf);
-    expect(pages).toHaveLength(layout.pageCount);
-    pages.forEach((p, i) => {
-      expect(p.text).toContain(`Sayfa ${i + 1} / ${pages.length}`);
-      expect(p.text).toContain("Kliniva AI ile oluşturuldu");
-      expect(p.text).toContain("Örnek Işık");
-    });
-    for (let i = 0; i < layout.pageCount; i++) {
-      expect(layout.boxes.some((b) => b.page === i && b.kind === "header")).toBe(true);
-      expect(layout.boxes.some((b) => b.page === i && b.kind === "footer")).toBe(true);
-    }
-  });
+      SIG,
+    ));
+  const HEAVY_TIMEOUT = 15_000;
 
-  it("içerik footer / header bölgesine taşmaz", async () => {
-    const { layout } = await renderSignedDocumentPdfWithLayout(
-      { ...base, content: longContent, choices: manyChoices },
-      makePng(320, 120),
-    );
-    assertNoOverlap(layout);
-  });
+  it(
+    "uzun metin çok sayfaya bölünür; her sayfada header ve footer, 'Sayfa X / Y' doğru",
+    async () => {
+      const { pdf, layout } = await renderLongDoc();
+      expect(layout.pageCount).toBeGreaterThan(2);
+      const pages = await inspect(pdf, { images: false });
+      expect(pages).toHaveLength(layout.pageCount);
+      pages.forEach((p, i) => {
+        expect(p.text).toContain(`Sayfa ${i + 1} / ${pages.length}`);
+        expect(p.text).toContain("Kliniva AI ile oluşturuldu");
+        expect(p.text).toContain("Örnek Işık");
+      });
+      for (let i = 0; i < layout.pageCount; i++) {
+        expect(layout.boxes.some((b) => b.page === i && b.kind === "header")).toBe(true);
+        expect(layout.boxes.some((b) => b.page === i && b.kind === "footer")).toBe(true);
+      }
+    },
+    HEAVY_TIMEOUT,
+  );
+
+  it(
+    "içerik footer / header bölgesine taşmaz",
+    async () => {
+      const { layout } = await renderLongDoc();
+      assertNoOverlap(layout);
+    },
+    HEAVY_TIMEOUT,
+  );
 
   it("imza bloğu sayfalar arasında bölünmez (farklı metin uzunluklarında)", async () => {
     for (let n = 1; n <= 40; n += 3) {
       const content = Array.from({ length: n }, (_, i) => `Satır ${i + 1}: açıklama metni ğüş.`).join("\n");
-      const { layout } = await renderSignedDocumentPdfWithLayout({ ...base, content }, makePng(320, 120));
+      const { layout } = await renderSignedDocumentPdfWithLayout({ ...base, content }, SIG);
       const sig = layout.signatureBlock;
       expect(sig.bottom, `n=${n}`).toBeGreaterThanOrEqual(layout.contentFloor - 0.01);
       expect(sig.top, `n=${n}`).toBeLessThanOrEqual(layout.contentCeilings[sig.page]! + 18.01);
@@ -174,7 +197,7 @@ describe("PDF v2 — yerleşim", () => {
 
 describe("PDF v2 — logo", () => {
   it("klinik logosu varsa ilk sayfada çizilir (imza + logo = 2 görüntü)", async () => {
-    const { pdf, layout } = await renderSignedDocumentPdfWithLayout(base, makePng(320, 120), {
+    const { pdf, layout } = await renderSignedDocumentPdfWithLayout(base, SIG, {
       logoPng: makePng(200, 80),
     });
     expect(layout.hasLogo).toBe(true);
@@ -183,7 +206,7 @@ describe("PDF v2 — logo", () => {
   });
 
   it("logo yoksa metin başlık; başka (ör. Kliniva) logo görüntüsü eklenmez", async () => {
-    const { pdf, layout } = await renderSignedDocumentPdfWithLayout(base, makePng(320, 120));
+    const { pdf, layout } = await renderSignedDocumentPdfWithLayout(base, SIG);
     expect(layout.hasLogo).toBe(false);
     const pages = await inspect(pdf);
     expect(pages.reduce((a, p) => a + p.images, 0)).toBe(1); // yalnızca imza

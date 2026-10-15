@@ -21,7 +21,11 @@ export type AppErrorCode =
   | "APPOINTMENT_IN_PAST"
   | "BOOKING_OUT_OF_RANGE"
   | "INVALID_STATUS_TRANSITION"
-  | "INSUFFICIENT_STOCK";
+  | "INSUFFICIENT_STOCK"
+  | "LOT_EXPIRED"
+  | "LOT_RECALLED"
+  | "TRACKING_MODE_CHANGE_REQUIRES_MIGRATION"
+  | "LOT_TRACKING_ALREADY_IN_USE";
 
 const STATUS: Record<AppErrorCode, number> = {
   UNAUTHENTICATED: 401,
@@ -43,6 +47,10 @@ const STATUS: Record<AppErrorCode, number> = {
   BOOKING_OUT_OF_RANGE: 422,
   INVALID_STATUS_TRANSITION: 409,
   INSUFFICIENT_STOCK: 409,
+  LOT_EXPIRED: 409,
+  LOT_RECALLED: 409,
+  TRACKING_MODE_CHANGE_REQUIRES_MIGRATION: 409,
+  LOT_TRACKING_ALREADY_IN_USE: 409,
 };
 
 const MESSAGES: Record<AppErrorCode, string> = {
@@ -65,6 +73,11 @@ const MESSAGES: Record<AppErrorCode, string> = {
   BOOKING_OUT_OF_RANGE: "Seçilen tarih randevu alınabilecek aralığın dışında.",
   INVALID_STATUS_TRANSITION: "Kayıt bu duruma geçirilemez.",
   INSUFFICIENT_STOCK: "Seçilen lokasyonda yeterli stok yok.",
+  LOT_EXPIRED: "Bu lotun son kullanma tarihi geçmiş; hasta kullanımında seçilemez.",
+  LOT_RECALLED: "Bu lot geri çağrılmış; kullanılamaz.",
+  TRACKING_MODE_CHANGE_REQUIRES_MIGRATION:
+    "Stoğu olan üründe lot takibi açılamaz. Önce fiziksel sayım ile stoğu sıfırlayıp lotlu giriş yapın.",
+  LOT_TRACKING_ALREADY_IN_USE: "Lot geçmişi olan üründe lot / SKT takibi kapatılamaz.",
 };
 
 export class AppError extends Error {

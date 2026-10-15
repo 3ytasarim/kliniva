@@ -1,0 +1,6 @@
+ALTER TABLE "kliniva"."stock_movements" ADD COLUMN "from_stock_lot_id" uuid;--> statement-breakpoint
+ALTER TABLE "kliniva"."stock_movements" ADD COLUMN "to_stock_lot_id" uuid;--> statement-breakpoint
+ALTER TABLE "kliniva"."stock_movements" ADD CONSTRAINT "stock_movements_from_lot_fk" FOREIGN KEY ("tenant_id","from_stock_lot_id","inventory_item_id","from_location_id") REFERENCES "kliniva"."stock_lots"("tenant_id","id","inventory_item_id","location_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "kliniva"."stock_movements" ADD CONSTRAINT "stock_movements_to_lot_fk" FOREIGN KEY ("tenant_id","to_stock_lot_id","inventory_item_id","to_location_id") REFERENCES "kliniva"."stock_lots"("tenant_id","id","inventory_item_id","location_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "stock_movements_from_lot_idx" ON "kliniva"."stock_movements" USING btree ("tenant_id","from_stock_lot_id");--> statement-breakpoint
+CREATE INDEX "stock_movements_to_lot_idx" ON "kliniva"."stock_movements" USING btree ("tenant_id","to_stock_lot_id");

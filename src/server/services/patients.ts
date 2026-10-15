@@ -153,7 +153,7 @@ export const maskPhone = maskPhoneNumber;
  * Şube kapsamı SQL koşulu (kiracı geneli kullanıcıda undefined).
  * Not: Drizzle sql`` içindeki sütunları nitelendirmeden yazdığı için dış tablo AÇIKÇA (kliniva.patients) yazılır.
  */
-function patientScopeFilter(ctx: AuthContext): SQL | undefined {
+export function patientScopeFilter(ctx: AuthContext): SQL | undefined {
   if (ctx.branchScope.all) return undefined;
   const ids = [...ctx.branchScope.branchIds];
   if (!ids.length) return sql`false`;

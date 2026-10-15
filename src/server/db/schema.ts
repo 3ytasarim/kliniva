@@ -515,6 +515,8 @@ export const clinicProfiles = kliniva.table(
     slotIntervalMinutes: integer("slot_interval_minutes").notNull().default(15),
     /** Negatif stok — bu sürümde her zaman false (DB check + bakiye check). */
     allowNegativeStock: boolean("allow_negative_stock").notNull().default(false),
+    /** "Yakında süresi dolacak" penceresi (gün). */
+    expiryWarningDays: integer("expiry_warning_days").notNull().default(30),
     active: boolean("active").notNull().default(true),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -526,6 +528,7 @@ export const clinicProfiles = kliniva.table(
     check("clinic_profiles_horizon_ck", sql`${t.maxBookingDaysAhead} between 1 and 730`),
     check("clinic_profiles_slot_ck", sql`${t.slotIntervalMinutes} in (5, 10, 15, 20, 30, 60)`),
     check("clinic_profiles_negative_stock_ck", sql`${t.allowNegativeStock} = false`),
+    check("clinic_profiles_expiry_warning_ck", sql`${t.expiryWarningDays} between 1 and 365`),
   ],
 );
 
@@ -1094,6 +1097,7 @@ export const inventoryItems = kliniva.table(
     unique("inventory_items_tenant_code_uq").on(t.tenantId, t.code),
     unique("inventory_items_tenant_barcode_uq").on(t.tenantId, t.barcode),
     check("inventory_items_min_ck", sql`${t.minimumStockLevel} is null or ${t.minimumStockLevel} >= 0`),
+    check("inventory_items_expiry_requires_lots_ck", sql`not ${t.trackExpiry} or ${t.trackLots}`),
     index("inventory_items_tenant_name_idx").on(t.tenantId, t.name),
   ],
 );
@@ -1172,10 +1176,21 @@ export const stockLots = kliniva.table(
     tenantId: uuid("tenant_id").notNull(),
     inventoryItemId: uuid("inventory_item_id").notNull(),
     locationId: uuid("location_id").notNull(),
-    lotNumber: text("lot_number"),
+    /** Lot / parti numarası — zorunlu, hareket gördükten sonra değişmez. */
+    lotNumber: text("lot_number").notNull(),
+    /** SKT (DATE, saat dilimi yok): şubenin yerel takviminde o günün SONUNA kadar geçerli. */
     expiryDate: date("expiry_date"),
+    /** Bakiye önbelleği — yalnızca defter tetikleyicisi değiştirir (uygulama rolünde sütun UPDATE yetkisi yok). */
     quantity: qty("quantity").notNull().default("0"),
+    receivedAt: timestamp("received_at", { withTimezone: true }),
+    supplierReference: text("supplier_reference"),
+    active: boolean("active").notNull().default(true),
+    /** Geri çağırma — geri alınamaz; gerekçe AES-256-GCM. */
+    recalledAt: timestamp("recalled_at", { withTimezone: true }),
+    recalledByUserId: uuid("recalled_by_user_id"),
+    recallReasonEncrypted: text("recall_reason_encrypted"),
     createdAt: createdAt(),
+    updatedAt: updatedAt(),
   },
   (t) => [
     foreignKey({
@@ -1189,7 +1204,11 @@ export const stockLots = kliniva.table(
       foreignColumns: [inventoryLocations.tenantId, inventoryLocations.id],
     }),
     unique("stock_lots_tenant_id_uq").on(t.tenantId, t.id),
+    /** Hareket / tahsis bağlantıları lotun AYNI ürün + AYNI lokasyona ait olduğunu bu anahtarla doğrular. */
+    unique("stock_lots_tenant_id_item_location_uq").on(t.tenantId, t.id, t.inventoryItemId, t.locationId),
+    unique("stock_lots_identity_uq").on(t.tenantId, t.inventoryItemId, t.locationId, t.lotNumber),
     check("stock_lots_non_negative_ck", sql`${t.quantity} >= 0`),
+    check("stock_lots_number_ck", sql`length(trim(${t.lotNumber})) between 1 and 64`),
     index("stock_lots_expiry_idx").on(t.tenantId, t.expiryDate),
   ],
 );
@@ -1260,7 +1279,6 @@ export const patientMaterialUsageItems = kliniva.table(
     patientUsageId: uuid("patient_usage_id").notNull(),
     inventoryItemId: uuid("inventory_item_id").notNull(),
     locationId: uuid("location_id").notNull(),
-    lotId: uuid("lot_id"),
     quantity: qty("quantity").notNull(),
     createdAt: createdAt(),
   },
@@ -1280,11 +1298,7 @@ export const patientMaterialUsageItems = kliniva.table(
       columns: [t.tenantId, t.locationId],
       foreignColumns: [inventoryLocations.tenantId, inventoryLocations.id],
     }),
-    foreignKey({
-      name: "pmu_items_lot_fk",
-      columns: [t.tenantId, t.lotId],
-      foreignColumns: [stockLots.tenantId, stockLots.id],
-    }),
+    unique("pmu_items_tenant_id_item_location_uq").on(t.tenantId, t.id, t.inventoryItemId, t.locationId),
     unique("pmu_items_uq").on(t.tenantId, t.patientUsageId, t.inventoryItemId, t.locationId),
     check("pmu_items_quantity_ck", sql`${t.quantity} > 0`),
   ],
@@ -1307,7 +1321,9 @@ export const stockMovements = kliniva.table(
     patientId: uuid("patient_id"),
     appointmentId: uuid("appointment_id"),
     patientUsageId: uuid("patient_usage_id"),
-    lotId: uuid("lot_id"),
+    /** Lot takipli ürün: kaynak / hedef lot (lot AYNI ürün + AYNI lokasyon — bileşik FK). */
+    fromStockLotId: uuid("from_stock_lot_id"),
+    toStockLotId: uuid("to_stock_lot_id"),
     reference: text("reference"),
     reason: text("reason"),
     createdByUserId: uuid("created_by_user_id").notNull(),
@@ -1345,10 +1361,17 @@ export const stockMovements = kliniva.table(
       foreignColumns: [patientMaterialUsages.tenantId, patientMaterialUsages.id],
     }),
     foreignKey({
-      name: "stock_movements_lot_fk",
-      columns: [t.tenantId, t.lotId],
-      foreignColumns: [stockLots.tenantId, stockLots.id],
+      name: "stock_movements_from_lot_fk",
+      columns: [t.tenantId, t.fromStockLotId, t.inventoryItemId, t.fromLocationId],
+      foreignColumns: [stockLots.tenantId, stockLots.id, stockLots.inventoryItemId, stockLots.locationId],
     }),
+    foreignKey({
+      name: "stock_movements_to_lot_fk",
+      columns: [t.tenantId, t.toStockLotId, t.inventoryItemId, t.toLocationId],
+      foreignColumns: [stockLots.tenantId, stockLots.id, stockLots.inventoryItemId, stockLots.locationId],
+    }),
+    index("stock_movements_from_lot_idx").on(t.tenantId, t.fromStockLotId),
+    index("stock_movements_to_lot_idx").on(t.tenantId, t.toStockLotId),
     check("stock_movements_quantity_ck", sql`${t.quantity} > 0`),
     check(
       "stock_movements_shape_ck",
@@ -1393,5 +1416,46 @@ export const serviceMaterialTemplates = kliniva.table(
     }).onDelete("cascade"),
     unique("smt_uq").on(t.tenantId, t.clinicalServiceId, t.inventoryItemId),
     check("smt_quantity_ck", sql`${t.defaultQuantity} > 0`),
+  ],
+);
+
+// ---------------------------------------------------------------- Sprint 5: lot tahsisi
+
+/**
+ * Hasta kullanım kalemi → lot tahsisi (bir kalem birden fazla lottan karşılanabilir). DRAFT iken elle seçim
+ * (FEFO'yu geçersiz kılma) burada tutulur; kesinleşmede gerçek tahsis yazılır ve değişmez. Lot, kalemin AYNI
+ * ürün + AYNI lokasyonuna ait olmak zorundadır (iki bileşik FK).
+ */
+export const patientMaterialUsageAllocations = kliniva.table(
+  "patient_material_usage_allocations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    patientUsageItemId: uuid("patient_usage_item_id").notNull(),
+    inventoryItemId: uuid("inventory_item_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    stockLotId: uuid("stock_lot_id").notNull(),
+    quantity: qty("quantity").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: "pmu_alloc_item_fk",
+      columns: [t.tenantId, t.patientUsageItemId, t.inventoryItemId, t.locationId],
+      foreignColumns: [
+        patientMaterialUsageItems.tenantId,
+        patientMaterialUsageItems.id,
+        patientMaterialUsageItems.inventoryItemId,
+        patientMaterialUsageItems.locationId,
+      ],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "pmu_alloc_lot_fk",
+      columns: [t.tenantId, t.stockLotId, t.inventoryItemId, t.locationId],
+      foreignColumns: [stockLots.tenantId, stockLots.id, stockLots.inventoryItemId, stockLots.locationId],
+    }),
+    unique("pmu_alloc_uq").on(t.tenantId, t.patientUsageItemId, t.stockLotId),
+    check("pmu_alloc_quantity_ck", sql`${t.quantity} > 0`),
+    index("pmu_alloc_lot_idx").on(t.tenantId, t.stockLotId),
   ],
 );

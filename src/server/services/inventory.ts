@@ -41,6 +41,13 @@ import {
 import { addDays, zonedDateTimeToUtc, dateInZone, DEFAULT_TIMEZONE } from "@/lib/time";
 import { clinicProfiles } from "@/server/db/schema";
 import { uuidSchema } from "@/server/validation";
+import {
+  findOrCreateLot,
+  loadLotInScope,
+  lockLotIdentity,
+  usableLotSum,
+  type LotRow,
+} from "@/server/services/lot-core";
 
 /**
  * Stok uygulama servisleri — HTTP / AI bağımsız. Her çağrı: yetki + kiracı (RLS) + şube kapsamı (lokasyon şubesi).
@@ -77,6 +84,17 @@ export function mapMovementError(e: unknown): never {
   );
   if (/KLINIVA_INSUFFICIENT_STOCK/.test(msg) || info.code === "23514")
     throw new AppError("INSUFFICIENT_STOCK");
+  // Lot korumaları (DB tetikleyicisi — servis kontrolünü atlatan yarışlarda son savunma).
+  if (/KLINIVA_LOT_EXPIRED/.test(msg)) throw new AppError("LOT_EXPIRED");
+  if (/KLINIVA_LOT_RECALLED/.test(msg)) throw new AppError("LOT_RECALLED");
+  if (/KLINIVA_LOT_INACTIVE/.test(msg))
+    throw new AppError("VALIDATION", { fields: ["stockLotId"], message: "Lot aktif değil." });
+  if (/KLINIVA_INVALID: (lot-tracked movement requires lot|lot on non lot-tracked item)/.test(msg)) {
+    // Takip modu eşzamanlı değişti → istemci yeniden denemeli.
+    throw new AppError("CONFLICT", {
+      message: "Ürünün lot takip modu değişti; sayfayı yenileyip tekrar deneyin.",
+    });
+  }
   if (info.code === PG_FOREIGN_KEY_VIOLATION) throw new AppError("NOT_FOUND");
   throw e;
 }
@@ -161,12 +179,17 @@ export async function loadLocation(
   return row;
 }
 
+/**
+ * Ürün yükleme. forStock: stok hareketi öncesi — satır FOR SHARE kilitlenir; böylece lot takip modu değişikliği
+ * (updateInventoryItem, FOR UPDATE) ile stok hareketleri birbirini bekler: mod, hareket sürerken değişemez.
+ */
 export async function loadItem(scope: TenantScope, rawId: unknown, opts: { forStock?: boolean } = {}) {
   const id = parseId(rawId);
-  const [item] = await scope.tx
+  const q = scope.tx
     .select()
     .from(inventoryItems)
     .where(tenantWhere(inventoryItems, scope, eq(inventoryItems.id, id)));
+  const [item] = opts.forStock ? await q.for("share") : await q;
   if (!item) throw new AppError("NOT_FOUND");
   if (opts.forStock) {
     if (!item.active)
@@ -177,15 +200,54 @@ export async function loadItem(scope: TenantScope, rawId: unknown, opts: { forSt
         message: "Bu ürün için stok takibi kapalı.",
       });
     }
-    if (item.trackLots) {
-      // Lot bazlı hareket Sprint 5 kapsamında (model temeli hazır).
-      throw new AppError("VALIDATION", {
-        fields: ["inventoryItemId"],
-        message: "Lot takipli ürün hareketleri henüz desteklenmiyor.",
-      });
-    }
   }
   return item;
+}
+
+/** Lot takipli üründe hareket için lot: AYNI ürün + AYNI lokasyonda olmalı (aksi NOT_FOUND — varlık sızdırılmaz). */
+async function loadMovementLot(
+  scope: TenantScope,
+  ctx: AuthContext,
+  item: { id: string; trackLots: boolean },
+  locationId: string,
+  rawLotId: string | undefined,
+  field: string,
+): Promise<LotRow | null> {
+  if (!item.trackLots) {
+    if (rawLotId)
+      throw new AppError("VALIDATION", { fields: [field], message: "Bu ürün lot takipli değil." });
+    return null;
+  }
+  if (!rawLotId) throw new AppError("VALIDATION", { fields: [field], message: "Lot seçimi zorunlu." });
+  const lot = await loadLotInScope(scope, ctx, rawLotId);
+  if (lot.inventoryItemId !== item.id || lot.locationId !== locationId) throw new AppError("NOT_FOUND");
+  return lot;
+}
+
+/** Kilit ALTINDA lot miktarı (binde birim). */
+async function lotMilli(scope: TenantScope, lotId: string): Promise<number> {
+  const [l] = await scope.tx
+    .select({ q: stockLots.quantity })
+    .from(stockLots)
+    .where(tenantWhere(stockLots, scope, eq(stockLots.id, lotId)));
+  return l ? toMilli(l.q) : 0;
+}
+
+async function lotAudit(
+  scope: TenantScope,
+  ctx: AuthContext,
+  action: AuditAction,
+  lot: { id: string; inventoryItemId: string; locationId: string },
+  branchId: string | null,
+  extra: Record<string, string | number | boolean | null> = {},
+) {
+  await writeAudit(scope, actorOf(ctx), {
+    action,
+    entityType: "stock_lot",
+    entityId: lot.id,
+    branchId,
+    metadata: { lotId: lot.id, itemId: lot.inventoryItemId, locationId: lot.locationId, ...extra },
+  });
 }
 
 async function stockAudit(
@@ -292,13 +354,27 @@ export type InventoryItemListItem = {
   minimumStockLevel: string | null;
   trackInventory: boolean;
   active: boolean;
-  /** Kullanıcının görebildiği lokasyonlardaki toplam. */
+  /** Kullanıcının görebildiği lokasyonlardaki toplam (fiziksel). */
   totalStock: string;
+  /** Kullanılabilir: lot takipli üründe SKT'si geçmiş / geri çağrılmış / pasif lotlar hariç. */
+  usableStock: string;
+  trackLots: boolean;
+  trackExpiry: boolean;
+  /** Kritik stok kullanılabilir stoğa göre. */
   lowStock: boolean;
 };
 
-/** Görünür lokasyonlardaki toplam stok (tek alt sorgu — N+1 yok). */
-function totalStockExpr(ctx: AuthContext) {
+/**
+ * Bakiye satırının kullanılabilir miktarı: lot takipli üründe kullanılabilir lot toplamı, değilse bakiye.
+ * `b` = stock_balances takma adı, `itemTrackLots` = ürünün track_lots ifadesi.
+ */
+function usableOf(b: string, itemTrackLots: SQL): SQL<string> {
+  const ref = (c: string) => sql.raw(`${b}.${c}`);
+  return sql<string>`(case when ${itemTrackLots} then ${usableLotSum(ref("tenant_id"), ref("inventory_item_id"), ref("location_id"))} else ${ref("quantity")} end)`;
+}
+
+/** Görünür lokasyonlardaki toplam stok (tek alt sorgu — N+1 yok). usable: kullanılabilir stok toplamı. */
+function totalStockExpr(ctx: AuthContext, opts: { usable?: boolean } = {}) {
   const scoped = ctx.branchScope.all
     ? sql``
     : sql` and l.branch_id in (${sql.join(
@@ -306,7 +382,8 @@ function totalStockExpr(ctx: AuthContext) {
         sql`, `,
       )})`;
   if (!ctx.branchScope.all && ctx.branchScope.branchIds.size === 0) return sql<string>`0::numeric`;
-  return sql<string>`(select coalesce(sum(b.quantity), 0) from kliniva.stock_balances b
+  const value = opts.usable ? usableOf("b", sql`kliniva.inventory_items.track_lots`) : sql`b.quantity`;
+  return sql<string>`(select coalesce(sum(${value}), 0) from kliniva.stock_balances b
     join kliniva.inventory_locations l on l.tenant_id = b.tenant_id and l.id = b.location_id
     where b.tenant_id = kliniva.inventory_items.tenant_id and b.inventory_item_id = kliniva.inventory_items.id${scoped})`;
 }
@@ -338,6 +415,7 @@ export async function listInventoryItems(
       .from(inventoryItems)
       .where(where)) as [{ n: number }];
     const total = totalStockExpr(ctx);
+    const usable = totalStockExpr(ctx, { usable: true });
     const rows = await scope.tx
       .select({
         id: inventoryItems.id,
@@ -349,8 +427,11 @@ export async function listInventoryItems(
         categoryName: inventoryCategories.name,
         minimumStockLevel: inventoryItems.minimumStockLevel,
         trackInventory: inventoryItems.trackInventory,
+        trackLots: inventoryItems.trackLots,
+        trackExpiry: inventoryItems.trackExpiry,
         active: inventoryItems.active,
         totalStock: total,
+        usableStock: usable,
       })
       .from(inventoryItems)
       .leftJoin(
@@ -368,7 +449,8 @@ export async function listInventoryItems(
       items: rows.map((r) => ({
         ...r,
         totalStock: String(r.totalStock),
-        lowStock: r.minimumStockLevel !== null && toMilli(r.totalStock) <= toMilli(r.minimumStockLevel),
+        usableStock: String(r.usableStock),
+        lowStock: r.minimumStockLevel !== null && toMilli(r.usableStock) <= toMilli(r.minimumStockLevel),
       })),
       total: n,
       page: data.page,
@@ -388,6 +470,8 @@ function itemValues(data: ReturnType<typeof itemInput.parse>) {
     minimumStockLevel: data.minimumStockLevel ?? null,
     description: data.description ?? null,
     active: data.active,
+    trackLots: data.trackLots,
+    trackExpiry: data.trackExpiry,
   };
 }
 
@@ -416,7 +500,14 @@ export async function updateInventoryItem(ctx: AuthContext, rawId: unknown, inpu
   const id = parseId(rawId);
   const data = parseInput(itemInput, input);
   await tenantQuery(ctx, async (scope) => {
-    const before = await loadItem(scope, id);
+    // FOR UPDATE: süren stok hareketleri (FOR SHARE) bitene kadar bekler; mod kontrolü güncel veriyle yapılır.
+    const [before] = await scope.tx
+      .select()
+      .from(inventoryItems)
+      .where(tenantWhere(inventoryItems, scope, eq(inventoryItems.id, id)))
+      .for("update");
+    if (!before) throw new AppError("NOT_FOUND");
+    await assertTrackingModeChange(scope, before, data);
     if (before.unit !== data.unit) {
       const [m] = await scope.tx
         .select({ n: sql<number>`count(*)::int` })
@@ -438,9 +529,58 @@ export async function updateInventoryItem(ctx: AuthContext, rawId: unknown, inpu
       action: before.active && !data.active ? "INVENTORY_ITEM_DEACTIVATED" : "INVENTORY_ITEM_UPDATED",
       entityType: "inventory_item",
       entityId: id,
-      metadata: { itemId: id, active: data.active },
+      metadata: { itemId: id, active: data.active, trackLots: data.trackLots, trackExpiry: data.trackExpiry },
     });
   });
+}
+
+/**
+ * Takip modu kuralları — mevcut defter ve stok ASLA uydurma lotlarla dönüştürülmez:
+ *  - lot takibini AÇMAK: üründe (tüm kiracıda) fiziksel stok varsa TRACKING_MODE_CHANGE_REQUIRES_MIGRATION
+ *    (önce stok sıfırlanmalı / sayım ile düşülmeli; geçmiş hareketler olduğu gibi kalır).
+ *  - lot takibini KAPATMAK: herhangi bir lot satırı (geçmişi) varsa LOT_TRACKING_ALREADY_IN_USE.
+ *  - SKT takibini AÇMAK: SKT'siz lot satırı varsa TRACKING_MODE_CHANGE_REQUIRES_MIGRATION.
+ */
+async function assertTrackingModeChange(
+  scope: TenantScope,
+  before: { id: string; trackLots: boolean; trackExpiry: boolean },
+  next: { trackLots: boolean; trackExpiry: boolean },
+) {
+  if (!before.trackLots && next.trackLots) {
+    const [s] = await scope.tx
+      .select({ n: sql<number>`count(*)::int` })
+      .from(stockBalances)
+      .where(
+        tenantWhere(
+          stockBalances,
+          scope,
+          eq(stockBalances.inventoryItemId, before.id),
+          sql`${stockBalances.quantity} > 0`,
+        ),
+      );
+    if ((s?.n ?? 0) > 0) throw new AppError("TRACKING_MODE_CHANGE_REQUIRES_MIGRATION");
+  }
+  if (before.trackLots && !next.trackLots) {
+    const [l] = await scope.tx
+      .select({ n: sql<number>`count(*)::int` })
+      .from(stockLots)
+      .where(tenantWhere(stockLots, scope, eq(stockLots.inventoryItemId, before.id)));
+    if ((l?.n ?? 0) > 0) throw new AppError("LOT_TRACKING_ALREADY_IN_USE");
+  }
+  if (!before.trackExpiry && next.trackExpiry) {
+    const [l] = await scope.tx
+      .select({ n: sql<number>`count(*)::int` })
+      .from(stockLots)
+      .where(
+        tenantWhere(
+          stockLots,
+          scope,
+          eq(stockLots.inventoryItemId, before.id),
+          sql`${stockLots.expiryDate} is null`,
+        ),
+      );
+    if ((l?.n ?? 0) > 0) throw new AppError("TRACKING_MODE_CHANGE_REQUIRES_MIGRATION");
+  }
 }
 
 export type StockByLocationRow = {
@@ -452,9 +592,16 @@ export type StockByLocationRow = {
   locationType: string;
   branchId: string;
   branchName: string;
+  /** Fiziksel (raftaki) miktar. */
   quantity: string;
+  /** Kullanılabilir miktar (lot takipli üründe SKT geçmiş / geri çağrılmış / pasif lotlar hariç). */
+  usableQuantity: string;
+  trackLots: boolean;
   minimumStockLevel: string | null;
 };
+
+/** stockRows içindeki stock_balances satırı için kullanılabilir miktar. */
+const balanceUsable = () => usableOf("kliniva.stock_balances", sql`kliniva.inventory_items.track_lots`);
 
 async function stockRows(
   scope: TenantScope,
@@ -472,6 +619,8 @@ async function stockRows(
       branchId: branches.id,
       branchName: branches.name,
       quantity: stockBalances.quantity,
+      usableQuantity: balanceUsable(),
+      trackLots: inventoryItems.trackLots,
       minimumStockLevel: inventoryItems.minimumStockLevel,
     })
     .from(stockBalances)
@@ -514,12 +663,14 @@ export async function getInventoryItem(ctx: AuthContext, rawId: unknown) {
       : [];
     const stock = await stockRows(scope, ctx, [eq(stockBalances.inventoryItemId, item.id)]);
     const totalMilli = stock.reduce((a, r) => a + toMilli(r.quantity), 0);
+    const usableMilli = stock.reduce((a, r) => a + toMilli(r.usableQuantity), 0);
     return {
       ...item,
       categoryName: cat?.name ?? null,
       stockByLocation: stock,
       totalStock: fromMilli(totalMilli),
-      lowStock: item.minimumStockLevel !== null && totalMilli <= toMilli(item.minimumStockLevel),
+      usableStock: fromMilli(usableMilli),
+      lowStock: item.minimumStockLevel !== null && usableMilli <= toMilli(item.minimumStockLevel),
     };
   });
 }
@@ -657,12 +808,29 @@ export async function defaultLocationFor(
 export async function addStock(
   ctx: AuthContext,
   input: unknown,
-): Promise<{ movementId: string; balance: string }> {
+): Promise<{ movementId: string; balance: string; stockLotId: string | null }> {
   requirePermission(ctx, "inventory.stock.add");
   const data = parseInput(addStockInput, input);
   return tenantQuery(ctx, async (scope) => {
     const item = await loadItem(scope, data.inventoryItemId, { forStock: true });
+    if (item.trackLots) requirePermission(ctx, "inventory.lot.manage");
     const loc = await loadLocation(scope, ctx, data.locationId, { requireActive: true });
+    if (item.trackLots) {
+      const missing = [
+        !data.lotNumber ? "lotNumber" : null,
+        item.trackExpiry && !data.expiryDate ? "expiryDate" : null,
+      ].filter((f): f is string => f !== null);
+      if (missing.length) {
+        throw new AppError("VALIDATION", {
+          fields: missing,
+          message: "Lot takipli üründe lot numarası (ve SKT) zorunlu.",
+        });
+      }
+      // Kilit sırası: lot kimliği → stok (geri çağırma ile aynı sıra).
+      await lockLotIdentity(scope, item.id, data.lotNumber!);
+    } else if (data.lotNumber || data.expiryDate) {
+      throw new AppError("VALIDATION", { fields: ["lotNumber"], message: "Bu ürün lot takipli değil." });
+    }
     await lockStock(scope, [{ itemId: item.id, locationId: loc.id }]);
     if (data.kind === "INITIAL_STOCK") {
       const [prev] = await scope.tx
@@ -682,6 +850,17 @@ export async function addStock(
         });
       }
     }
+    // Lot: aynı (ürün, lokasyon, numara) varsa ona eklenir, yoksa boş lot açılır; miktar YALNIZCA hareketle gelir.
+    const lotRes = item.trackLots
+      ? await findOrCreateLot(scope, {
+          itemId: item.id,
+          locationId: loc.id,
+          lotNumber: data.lotNumber!,
+          expiryDate: data.expiryDate ?? null,
+          receivedAt: data.receivedAt ? new Date(`${data.receivedAt}T00:00:00Z`) : new Date(),
+          supplierReference: data.reference ?? null,
+        })
+      : null;
     const [m] = await scope.tx
       .insert(stockMovements)
       .values({
@@ -689,6 +868,7 @@ export async function addStock(
         inventoryItemId: item.id,
         movementType: data.kind,
         toLocationId: loc.id,
+        toStockLotId: lotRes?.lot.id ?? null,
         quantity: data.quantity,
         reference: data.reference ?? null,
         reason: data.reason ?? null,
@@ -703,7 +883,22 @@ export async function addStock(
       quantity: data.quantity,
       movementType: data.kind,
     });
-    return { movementId: m!.id, balance: fromMilli(await balanceMilli(scope, item.id, loc.id)) };
+    if (lotRes) {
+      if (lotRes.created) {
+        await lotAudit(scope, ctx, "LOT_CREATED", lotRes.lot, loc.branchId, {
+          hasExpiry: lotRes.lot.expiryDate !== null,
+        });
+      }
+      await lotAudit(scope, ctx, "LOT_STOCK_ADDED", lotRes.lot, loc.branchId, {
+        quantity: data.quantity,
+        movementType: data.kind,
+      });
+    }
+    return {
+      movementId: m!.id,
+      balance: fromMilli(await balanceMilli(scope, item.id, loc.id)),
+      stockLotId: lotRes?.lot.id ?? null,
+    };
   });
 }
 
@@ -722,10 +917,13 @@ export async function adjustStock(
         : ("ADJUSTMENT_OUT" as const);
   return tenantQuery(ctx, async (scope) => {
     const item = await loadItem(scope, data.inventoryItemId, { forStock: true });
+    if (item.trackLots) requirePermission(ctx, "inventory.lot.manage");
     const loc = await loadLocation(scope, ctx, data.locationId);
+    const lot = await loadMovementLot(scope, ctx, item, loc.id, data.stockLotId, "stockLotId");
     await lockStock(scope, [{ itemId: item.id, locationId: loc.id }]);
-    if (data.direction === "OUT" && (await balanceMilli(scope, item.id, loc.id)) < toMilli(data.quantity)) {
-      throw new AppError("INSUFFICIENT_STOCK");
+    if (data.direction === "OUT") {
+      const have = lot ? await lotMilli(scope, lot.id) : await balanceMilli(scope, item.id, loc.id);
+      if (have < toMilli(data.quantity)) throw new AppError("INSUFFICIENT_STOCK");
     }
     const [m] = await scope.tx
       .insert(stockMovements)
@@ -735,19 +933,27 @@ export async function adjustStock(
         movementType: type,
         fromLocationId: data.direction === "OUT" ? loc.id : null,
         toLocationId: data.direction === "IN" ? loc.id : null,
+        fromStockLotId: data.direction === "OUT" ? (lot?.id ?? null) : null,
+        toStockLotId: data.direction === "IN" ? (lot?.id ?? null) : null,
         quantity: data.quantity,
         reason: data.reason,
         createdByUserId: ctx.userId,
       })
       .returning({ id: stockMovements.id })
       .catch(mapMovementError);
-    await stockAudit(scope, ctx, "STOCK_ADJUSTED", {
-      itemId: item.id,
-      locationId: loc.id,
-      branchId: loc.branchId,
-      quantity: data.quantity,
-      movementType: type,
-    });
+    await stockAudit(
+      scope,
+      ctx,
+      "STOCK_ADJUSTED",
+      {
+        itemId: item.id,
+        locationId: loc.id,
+        branchId: loc.branchId,
+        quantity: data.quantity,
+        movementType: type,
+      },
+      { lotId: lot?.id ?? null },
+    );
     return { movementId: m!.id, balance: fromMilli(await balanceMilli(scope, item.id, loc.id)) };
   });
 }
@@ -756,7 +962,10 @@ export async function adjustStock(
  * Transfer — TEK hareket (TRANSFER, from + to). Tetikleyici iki bakiyeyi aynı transaction'da günceller: biri
  * başarısızsa hiçbiri değişmez. Şubeler arası transfer ayrıca inventory.transfer.cross_branch ister.
  */
-export async function transferStock(ctx: AuthContext, input: unknown): Promise<{ movementId: string }> {
+export async function transferStock(
+  ctx: AuthContext,
+  input: unknown,
+): Promise<{ movementId: string; toStockLotId: string | null }> {
   requirePermission(ctx, "inventory.transfer");
   const data = parseInput(transferStockInput, input);
   if (data.fromLocationId === data.toLocationId) {
@@ -764,6 +973,7 @@ export async function transferStock(ctx: AuthContext, input: unknown): Promise<{
   }
   return tenantQuery(ctx, async (scope) => {
     const item = await loadItem(scope, data.inventoryItemId, { forStock: true });
+    if (item.trackLots) requirePermission(ctx, "inventory.lot.manage");
     const from = await loadLocation(scope, ctx, data.fromLocationId);
     const crossAllowed = hasPermission(ctx, "inventory.transfer.cross_branch");
     const to = await loadLocation(scope, ctx, data.toLocationId, {
@@ -771,12 +981,35 @@ export async function transferStock(ctx: AuthContext, input: unknown): Promise<{
       anyBranch: crossAllowed,
     });
     if (from.branchId !== to.branchId && !crossAllowed) throw new AppError("FORBIDDEN");
+    const srcLot = await loadMovementLot(scope, ctx, item, from.id, data.fromStockLotId, "fromStockLotId");
+    // Kilit sırası: lot kimliği → stok (geri çağırma ile aynı sıra; hedef lot satırı bu kilit altında açılır).
+    if (srcLot) await lockLotIdentity(scope, item.id, srcLot.lotNumber);
     await lockStock(scope, [
       { itemId: item.id, locationId: from.id },
       { itemId: item.id, locationId: to.id },
     ]);
-    if ((await balanceMilli(scope, item.id, from.id)) < toMilli(data.quantity))
+    let dstLot: { lot: LotRow; created: boolean } | null = null;
+    if (srcLot) {
+      // Kilit altında yeniden oku: geri çağırma bu işlemden hemen önce tamamlanmış olabilir.
+      const [fresh] = await scope.tx
+        .select({ recalledAt: stockLots.recalledAt, active: stockLots.active, q: stockLots.quantity })
+        .from(stockLots)
+        .where(tenantWhere(stockLots, scope, eq(stockLots.id, srcLot.id)));
+      if (!fresh) throw new AppError("NOT_FOUND");
+      if (fresh.recalledAt) throw new AppError("LOT_RECALLED");
+      if (toMilli(fresh.q) < toMilli(data.quantity)) throw new AppError("INSUFFICIENT_STOCK");
+      // Hedefte AYNI lot kimliği (numara + SKT) — tetikleyici de doğrular.
+      dstLot = await findOrCreateLot(scope, {
+        itemId: item.id,
+        locationId: to.id,
+        lotNumber: srcLot.lotNumber,
+        expiryDate: srcLot.expiryDate,
+        receivedAt: srcLot.receivedAt,
+        supplierReference: srcLot.supplierReference,
+      });
+    } else if ((await balanceMilli(scope, item.id, from.id)) < toMilli(data.quantity)) {
       throw new AppError("INSUFFICIENT_STOCK");
+    }
     const [m] = await scope.tx
       .insert(stockMovements)
       .values({
@@ -785,12 +1018,24 @@ export async function transferStock(ctx: AuthContext, input: unknown): Promise<{
         movementType: "TRANSFER",
         fromLocationId: from.id,
         toLocationId: to.id,
+        fromStockLotId: srcLot?.id ?? null,
+        toStockLotId: dstLot?.lot.id ?? null,
         quantity: data.quantity,
         reason: data.reason ?? null,
         createdByUserId: ctx.userId,
       })
       .returning({ id: stockMovements.id })
       .catch(mapMovementError);
+    if (srcLot && dstLot) {
+      if (dstLot.created) {
+        await lotAudit(scope, ctx, "LOT_CREATED", dstLot.lot, to.branchId, { sourceLotId: srcLot.id });
+      }
+      await lotAudit(scope, ctx, "LOT_TRANSFERRED", srcLot, from.branchId, {
+        toLotId: dstLot.lot.id,
+        toLocationId: to.id,
+        quantity: data.quantity,
+      });
+    }
     await stockAudit(
       scope,
       ctx,
@@ -804,7 +1049,7 @@ export async function transferStock(ctx: AuthContext, input: unknown): Promise<{
       },
       { toLocationId: to.id, toBranchId: to.branchId, crossBranch: from.branchId !== to.branchId },
     );
-    return { movementId: m!.id };
+    return { movementId: m!.id, toStockLotId: dstLot?.lot.id ?? null };
   });
 }
 
@@ -822,6 +1067,9 @@ export type MovementListItem = {
   reference: string | null;
   reason: string | null;
   patientUsageId: string | null;
+  /** Lot takipli hareket: lot numarası (kaynak veya hedef lot). */
+  lotNumber: string | null;
+  lotExpiryDate: string | null;
 };
 
 /** Hareket geçmişi — sayfalı (25 / en fazla 100), kapsam: kaynağı veya hedefi görünür lokasyonda olan hareketler. */
@@ -830,6 +1078,7 @@ export async function listStockMovements(ctx: AuthContext, input: unknown = {}) 
   const data = parseInput(listMovementsInput, input);
   const fromLoc = alias(inventoryLocations, "from_loc");
   const toLoc = alias(inventoryLocations, "to_loc");
+  const mvLot = alias(stockLots, "mv_lot");
   return tenantQuery(ctx, async (scope) => {
     const [p] = await scope.tx
       .select({ tz: clinicProfiles.timezone })
@@ -850,6 +1099,12 @@ export async function listStockMovements(ctx: AuthContext, input: unknown = {}) 
           )
         : undefined,
       data.branchId ? or(eq(fromLoc.branchId, data.branchId), eq(toLoc.branchId, data.branchId)) : undefined,
+      data.stockLotId
+        ? or(
+            eq(stockMovements.fromStockLotId, data.stockLotId),
+            eq(stockMovements.toStockLotId, data.stockLotId),
+          )
+        : undefined,
       data.from ? gte(stockMovements.createdAt, zonedDateTimeToUtc(data.from, 0, tz)) : undefined,
       data.to ? lt(stockMovements.createdAt, zonedDateTimeToUtc(addDays(data.to, 1), 0, tz)) : undefined,
     ];
@@ -870,6 +1125,8 @@ export async function listStockMovements(ctx: AuthContext, input: unknown = {}) 
           reference: stockMovements.reference,
           reason: stockMovements.reason,
           patientUsageId: stockMovements.patientUsageId,
+          lotNumber: mvLot.lotNumber,
+          lotExpiryDate: mvLot.expiryDate,
         })
         .from(stockMovements)
         .innerJoin(
@@ -890,6 +1147,13 @@ export async function listStockMovements(ctx: AuthContext, input: unknown = {}) 
         .leftJoin(
           users,
           and(eq(users.id, stockMovements.createdByUserId), eq(users.tenantId, stockMovements.tenantId)),
+        )
+        .leftJoin(
+          mvLot,
+          and(
+            eq(mvLot.tenantId, stockMovements.tenantId),
+            sql`${mvLot.id} = coalesce(${stockMovements.fromStockLotId}, ${stockMovements.toStockLotId})`,
+          ),
         );
     const where = tenantWhere(stockMovements, scope, ...conds);
     const [{ n }] = (await scope.tx
@@ -924,6 +1188,8 @@ export async function listStockMovements(ctx: AuthContext, input: unknown = {}) 
       reference: r.reference,
       reason: r.reason,
       patientUsageId: canUsage ? r.patientUsageId : null,
+      lotNumber: r.lotNumber,
+      lotExpiryDate: r.lotExpiryDate,
     }));
     return { items, total: n, page: data.page, limit: data.limit };
   });
@@ -934,8 +1200,9 @@ export async function listStockMovements(ctx: AuthContext, input: unknown = {}) 
 export type LowStockRow = StockByLocationRow;
 
 /**
- * Kritik stok: ürün düzeyinde asgari seviye (minimumStockLevel) ile LOKASYON bakiyesi karşılaştırılır
- * (quantity <= minimum). Ayrıca görünür lokasyonlarda toplam stoğu 0 olan (tükenen) aktif ürünler.
+ * Kritik stok: ürün düzeyinde asgari seviye (minimumStockLevel) ile LOKASYONDAKİ KULLANILABİLİR stok karşılaştırılır
+ * (usable <= minimum). Ayrıca görünür lokasyonlarda kullanılabilir toplamı 0 olan (tükenen) aktif ürünler.
+ * Lot takipli üründe SKT'si geçmiş / geri çağrılmış / pasif lotlar fiziksel stoktur ama kullanılabilir değildir.
  */
 export async function getLowStockItems(ctx: AuthContext, input: unknown = {}) {
   requirePermission(ctx, "inventory.low_stock.read");
@@ -944,12 +1211,13 @@ export async function getLowStockItems(ctx: AuthContext, input: unknown = {}) {
     const low = await stockRows(scope, ctx, [
       eq(inventoryItems.active, true),
       eq(inventoryItems.trackInventory, true),
-      sql`${inventoryItems.minimumStockLevel} is not null and ${stockBalances.quantity} <= ${inventoryItems.minimumStockLevel}`,
+      sql`${inventoryItems.minimumStockLevel} is not null and ${balanceUsable()} <= ${inventoryItems.minimumStockLevel}`,
       data.branchId ? eq(inventoryLocations.branchId, data.branchId) : undefined,
       data.locationId ? eq(inventoryLocations.id, data.locationId) : undefined,
       data.categoryId ? eq(inventoryItems.categoryId, data.categoryId) : undefined,
     ]);
-    const total = totalStockExpr(ctx);
+    // Tükenen: KULLANILABİLİR toplam 0 (yalnızca SKT'si geçmiş / geri çağrılmış lotu kalan ürün de tükenmiştir).
+    const total = totalStockExpr(ctx, { usable: true });
     const out = await scope.tx
       .select({ id: inventoryItems.id, name: inventoryItems.name, unit: inventoryItems.unit })
       .from(inventoryItems)
@@ -1027,9 +1295,63 @@ export async function getInventoryDashboard(ctx: AuthContext, input: unknown = {
             : undefined,
         ),
       );
+    // Lot / SKT kartları (inventory.expiry.read). Şube yerel takvimi ile; geri çağrılmış lotlar hariç (ayrı süreç).
+    let lotCards: { expiringSoon: number; expired: number; lotTrackedItems: number } | null = null;
+    if (hasPermission(ctx, "inventory.expiry.read")) {
+      const [cp] = await scope.tx
+        .select({ days: clinicProfiles.expiryWarningDays })
+        .from(clinicProfiles)
+        .where(tenantWhere(clinicProfiles, scope));
+      const days = cp?.days ?? 30;
+      const localToday = sql`(now() at time zone ${branches.timezone})::date`;
+      const [c] = await scope.tx
+        .select({
+          expired: sql<number>`count(*) filter (where ${stockLots.expiryDate} < ${localToday})::int`,
+          expiringSoon: sql<number>`count(*) filter (where ${stockLots.expiryDate} >= ${localToday} and ${stockLots.expiryDate} <= ${localToday} + ${days}::int)::int`,
+        })
+        .from(stockLots)
+        .innerJoin(
+          inventoryLocations,
+          and(
+            eq(inventoryLocations.id, stockLots.locationId),
+            eq(inventoryLocations.tenantId, stockLots.tenantId),
+          ),
+        )
+        .innerJoin(
+          branches,
+          and(
+            eq(branches.id, inventoryLocations.branchId),
+            eq(branches.tenantId, inventoryLocations.tenantId),
+          ),
+        )
+        .where(
+          tenantWhere(
+            stockLots,
+            scope,
+            locationScope(ctx),
+            sql`${stockLots.quantity} > 0`,
+            sql`${stockLots.recalledAt} is null`,
+            data.branchId ? eq(inventoryLocations.branchId, data.branchId) : undefined,
+            data.locationId ? eq(inventoryLocations.id, data.locationId) : undefined,
+          ),
+        );
+      const [t] = await scope.tx
+        .select({ n: sql<number>`count(*)::int` })
+        .from(inventoryItems)
+        .where(
+          tenantWhere(
+            inventoryItems,
+            scope,
+            eq(inventoryItems.active, true),
+            eq(inventoryItems.trackLots, true),
+          ),
+        );
+      lotCards = { expiringSoon: c?.expiringSoon ?? 0, expired: c?.expired ?? 0, lotTrackedItems: t?.n ?? 0 };
+    }
     return {
       today,
       activeItems: active,
+      lotCards,
       lowStock: lowData.low.length,
       outOfStock: lowData.outOfStock.length,
       todayUsage: counts[0]?.usage ?? 0,
@@ -1064,13 +1386,44 @@ export async function verifyStockBalance(ctx: AuthContext, input: unknown) {
       );
     const expected = toMilli(l?.sum ?? 0);
     const actual = await balanceMilli(scope, item.id, loc.id);
+    // Lot takipli: her lot önbelleği kendi defter toplamıyla; lot toplamı lokasyon bakiyesiyle eşleşmeli.
+    const lots: { lotId: string; lotNumber: string; expected: string; actual: string; ok: boolean }[] = [];
+    if (item.trackLots) {
+      const rows = await scope.tx.execute<{
+        id: string;
+        lot_number: string;
+        actual: string;
+        ledger: string;
+      }>(sql`
+        select l.id, l.lot_number, l.quantity as actual,
+          coalesce((select sum(case when m.to_stock_lot_id = l.id then m.quantity else -m.quantity end)
+             from kliniva.stock_movements m
+            where m.tenant_id = l.tenant_id and (m.to_stock_lot_id = l.id or m.from_stock_lot_id = l.id)), 0) as ledger
+          from kliniva.stock_lots l
+         where l.tenant_id = ${scope.tenantId}::uuid and l.inventory_item_id = ${item.id}::uuid
+           and l.location_id = ${loc.id}::uuid
+         order by l.lot_number`);
+      for (const r of rows.rows) {
+        lots.push({
+          lotId: r.id,
+          lotNumber: r.lot_number,
+          expected: fromMilli(toMilli(r.ledger)),
+          actual: fromMilli(toMilli(r.actual)),
+          ok: toMilli(r.ledger) === toMilli(r.actual),
+        });
+      }
+    }
+    const lotSumMilli = lots.reduce((a, x) => a + toMilli(x.actual), 0);
+    const lotsOk = !item.trackLots || (lots.every((x) => x.ok) && lotSumMilli === actual);
     const result = {
       itemId: item.id,
       locationId: loc.id,
       expected: fromMilli(expected),
       actual: fromMilli(actual),
       difference: fromMilli(actual - expected),
-      ok: expected === actual,
+      lots,
+      lotsOk,
+      ok: expected === actual && lotsOk,
     };
     if (!result.ok) {
       await writeAudit(scope, actorOf(ctx), {
@@ -1078,7 +1431,13 @@ export async function verifyStockBalance(ctx: AuthContext, input: unknown) {
         entityType: "inventory_item",
         entityId: item.id,
         branchId: loc.branchId,
-        metadata: { itemId: item.id, locationId: loc.id, expected: result.expected, actual: result.actual },
+        metadata: {
+          itemId: item.id,
+          locationId: loc.id,
+          expected: result.expected,
+          actual: result.actual,
+          lotDiffs: lots.filter((x) => !x.ok).length,
+        },
       });
     }
     return result;
@@ -1099,6 +1458,9 @@ export async function reconcileStockBalance(ctx: AuthContext, input: unknown) {
     await scope.tx.execute(
       sql`select * from kliniva.recompute_stock_balance(${check.itemId}::uuid, ${check.locationId}::uuid)`,
     );
+    for (const lot of check.lots.filter((x) => !x.ok)) {
+      await scope.tx.execute(sql`select * from kliniva.recompute_stock_lot(${lot.lotId}::uuid)`);
+    }
     await writeAudit(scope, actorOf(ctx), {
       action: "STOCK_BALANCE_RECONCILED",
       entityType: "inventory_item",
@@ -1112,50 +1474,4 @@ export async function reconcileStockBalance(ctx: AuthContext, input: unknown) {
     });
     return { ...check, applied: true };
   });
-}
-
-// ---------------------------------------------------------------- lot / son kullanma (temel)
-
-/** Yaklaşan son kullanma tarihli lotlar (Sprint 5'te lot bazlı tüketim; şimdilik rapor temeli). */
-export async function getExpiringLots(ctx: AuthContext, days = 30) {
-  requirePermission(ctx, "inventory.read");
-  const until = new Date(Date.now() + Math.min(Math.max(days, 1), 365) * 24 * 3600_000)
-    .toISOString()
-    .slice(0, 10);
-  return tenantQuery(ctx, (scope) =>
-    scope.tx
-      .select({
-        lotId: stockLots.id,
-        itemName: inventoryItems.name,
-        lotNumber: stockLots.lotNumber,
-        expiryDate: stockLots.expiryDate,
-        quantity: stockLots.quantity,
-        locationName: inventoryLocations.name,
-      })
-      .from(stockLots)
-      .innerJoin(
-        inventoryItems,
-        and(
-          eq(inventoryItems.id, stockLots.inventoryItemId),
-          eq(inventoryItems.tenantId, stockLots.tenantId),
-        ),
-      )
-      .innerJoin(
-        inventoryLocations,
-        and(
-          eq(inventoryLocations.id, stockLots.locationId),
-          eq(inventoryLocations.tenantId, stockLots.tenantId),
-        ),
-      )
-      .where(
-        tenantWhere(
-          stockLots,
-          scope,
-          locationScope(ctx),
-          sql`${stockLots.expiryDate} <= ${until}::date`,
-          sql`${stockLots.quantity} > 0`,
-        ),
-      )
-      .orderBy(asc(stockLots.expiryDate)),
-  );
 }

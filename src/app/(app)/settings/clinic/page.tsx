@@ -78,6 +78,15 @@ export default async function ClinicSettingsPage() {
             step={5}
             defaultValue={p.defaultAppointmentDurationMinutes}
           />
+          <Field
+            label="SKT uyarı penceresi (gün)"
+            name="expiryWarningDays"
+            type="number"
+            min={1}
+            max={365}
+            defaultValue={p.expiryWarningDays}
+            hint="Son kullanma tarihine bu kadar gün kalan lotlar 'yaklaşan' olarak gösterilir."
+          />
           <input type="hidden" name="country" value={p.country} />
         </ActionForm>
       </div>

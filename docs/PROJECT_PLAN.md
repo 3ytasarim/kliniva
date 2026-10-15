@@ -49,7 +49,14 @@ hasta dosyası randevular sekmesi, Sprint 1 izin/oda düzeltmesi. Ayrıntı: `do
 düzeltme / atomik transfer, şubeler arası transfer yetkisi, hasta malzeme kullanımı (taslak → kesinleştir → VOID),
 hizmet malzeme şablonu (öneri), kritik stok, uzlaştırma, lot/SKT temeli. Ayrıntı: `docs/INVENTORY.md`.
 
-## Sprint 5+ (öneri)
+## Sprint 5 — Lot / parti, SKT, FEFO ve stok güvenliği ✅
 
-Lot bazlı tüketim + SKT/FEFO, Voice AI (yetki kontrollü araçlar, `source = AI_VOICE`), raporlama, KVKK m.11 bilgi talebi
+Lot takip bayrakları ve mod kuralları, lotlu giriş / transfer (kimlik korunur), FEFO tahsisi (çoklu lot) ve elle
+seçim, SKT anlamı (şube yerel günü sonuna kadar), kullanılabilir vs fiziksel stok, hasta lot izlenebilirliği, geri
+çağırma (geri alınamaz), imha, fiziksel sayım, SKT raporu ve panel kartları, eşzamanlılık + DB havuzu yük testi.
+Ayrıntı: `docs/INVENTORY.md`.
+
+## Sprint 6+ (öneri)
+
+Voice AI (yetki kontrollü araçlar, `source = AI_VOICE`), raporlama, KVKK m.11 bilgi talebi
 dışa aktarımı ve düzeltme akışı, MFA zorunluluğu, orphan depo nesnesi temizliği.

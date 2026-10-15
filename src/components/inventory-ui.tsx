@@ -40,9 +40,35 @@ export function UsageStatusBadge({ status }: { status: "DRAFT" | "FINALIZED" | "
   return <span className={`badge ${m[status][0]}`}>{m[status][1]}</span>;
 }
 
+export type LotStatusCode =
+  "AVAILABLE" | "LOW_STOCK" | "EXPIRING_SOON" | "EXPIRED" | "DEPLETED" | "INACTIVE" | "RECALLED";
+
+export const LOT_STATUS_LABELS: Record<LotStatusCode, [string, string]> = {
+  AVAILABLE: ["badge-green", "Kullanılabilir"],
+  LOW_STOCK: ["badge-amber", "Düşük"],
+  EXPIRING_SOON: ["badge-amber", "SKT yaklaşıyor"],
+  EXPIRED: ["badge-red", "SKT geçmiş"],
+  DEPLETED: ["badge-gray", "Tükendi"],
+  INACTIVE: ["badge-gray", "Pasif"],
+  RECALLED: ["badge-red", "Geri çağrıldı"],
+};
+
+export function LotStatusBadge({ status }: { status: LotStatusCode }) {
+  const [cls, label] = LOT_STATUS_LABELS[status];
+  return <span className={`badge ${cls}`}>{label}</span>;
+}
+
+/** "YYYY-MM-DD" → "GG.AA.YYYY" (SKT bir takvim günüdür; saat dilimi dönüşümü YAPILMAZ). */
+export function formatExpiry(date: string | null): string {
+  if (!date) return "—";
+  const [y, m, d] = date.split("-");
+  return `${d}.${m}.${y}`;
+}
+
 const TABS = [
   { href: "/inventory", label: "Panel" },
   { href: "/inventory/items", label: "Ürünler" },
+  { href: "/inventory/expiry", label: "SKT takibi" },
   { href: "/inventory/locations", label: "Lokasyonlar" },
   { href: "/inventory/templates", label: "Hizmet şablonları" },
 ];

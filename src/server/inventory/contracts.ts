@@ -54,17 +54,28 @@ export const categoryInput = z.object({
   active: z.preprocess((v) => (v === undefined ? true : v), boolish),
 });
 
-export const itemInput = z.object({
-  name: z.string().trim().min(2).max(120),
-  code: optText(40),
-  barcode: optText(64),
-  categoryId: optUuid,
-  unit: z.enum(INVENTORY_UNITS).default("PIECE"),
-  trackInventory: z.preprocess((v) => (v === undefined ? true : v), boolish),
-  minimumStockLevel: optQuantity,
-  description: optText(500),
-  active: z.preprocess((v) => (v === undefined ? true : v), boolish),
-});
+const optDate = z.preprocess(blank, z.string().refine(isValidDate, "invalid date").optional());
+const lotNumberField = z.preprocess(blank, z.string().trim().min(1).max(64).optional());
+
+export const itemInput = z
+  .object({
+    name: z.string().trim().min(2).max(120),
+    code: optText(40),
+    barcode: optText(64),
+    categoryId: optUuid,
+    unit: z.enum(INVENTORY_UNITS).default("PIECE"),
+    trackInventory: z.preprocess((v) => (v === undefined ? true : v), boolish),
+    minimumStockLevel: optQuantity,
+    description: optText(500),
+    active: z.preprocess((v) => (v === undefined ? true : v), boolish),
+    /** Lot takibi / SKT takibi — SKT takibi lot takibini gerektirir (DB CHECK ile de). */
+    trackLots: z.preprocess((v) => (v === undefined ? false : v), boolish),
+    trackExpiry: z.preprocess((v) => (v === undefined ? false : v), boolish),
+  })
+  .refine((v) => !v.trackExpiry || v.trackLots, {
+    path: ["trackExpiry"],
+    message: "SKT takibi lot takibi gerektirir",
+  });
 
 export const locationInput = z
   .object({
@@ -82,6 +93,10 @@ export const addStockInput = z.object({
   kind: z.enum(["INITIAL_STOCK", "PURCHASE"]).default("PURCHASE"),
   reference: optText(80),
   reason: optText(300),
+  /** Lot takipli ürün: zorunlu. Aynı lokasyonda aynı numaralı lot varsa ona eklenir. */
+  lotNumber: lotNumberField,
+  expiryDate: optDate,
+  receivedAt: optDate,
 });
 export type AddStockInput = z.input<typeof addStockInput>;
 
@@ -93,6 +108,8 @@ export const adjustStockInput = z.object({
   kind: z.enum(["ADJUSTMENT", "WRITE_OFF"]).default("ADJUSTMENT"),
   quantity: quantitySchema,
   reason: z.string().trim().min(3).max(300),
+  /** Lot takipli ürün: zorunlu (lot bu lokasyonda olmalı). */
+  stockLotId: optUuid,
 });
 export type AdjustStockInput = z.input<typeof adjustStockInput>;
 
@@ -102,6 +119,8 @@ export const transferStockInput = z.object({
   toLocationId: uuidSchema,
   quantity: quantitySchema,
   reason: optText(300),
+  /** Lot takipli ürün: kaynak lot (zorunlu). Hedefte aynı lot kimliği korunur. */
+  fromStockLotId: optUuid,
 });
 export type TransferStockInput = z.input<typeof transferStockInput>;
 
@@ -123,6 +142,7 @@ export const listMovementsInput = z.object({
   inventoryItemId: optUuid,
   branchId: optUuid,
   locationId: optUuid,
+  stockLotId: optUuid,
   movementType: z.preprocess(
     blank,
     z
@@ -168,12 +188,31 @@ export const recordMaterialUsageInput = z.object({
   appointmentId: optUuid,
   branchId: optUuid,
   items: z
-    .array(z.object({ inventoryItemId: uuidSchema, quantity: quantitySchema, locationId: optUuid }))
+    .array(
+      z.object({
+        inventoryItemId: uuidSchema,
+        quantity: quantitySchema,
+        locationId: optUuid,
+        /** Elle lot seçimi (FEFO'yu geçersiz kılar); yoksa kesinleştirmede FEFO. */
+        lots: z
+          .array(z.object({ stockLotId: uuidSchema, quantity: quantitySchema }))
+          .max(20)
+          .optional(),
+      }),
+    )
     .min(1)
     .max(50),
   finalize: z.preprocess((v) => (v === undefined ? false : v), boolish),
 });
 export type RecordMaterialUsageInput = z.input<typeof recordMaterialUsageInput>;
+/** Sprint 5 adı (aynı şema). */
+export const recordPatientMaterialUsageInput = recordMaterialUsageInput;
+export type RecordPatientMaterialUsageInput = RecordMaterialUsageInput;
+
+/** Kullanım kalemi için elle lot tahsisi (boş liste = otomatik FEFO). */
+export const usageAllocationInput = z.object({
+  lots: z.array(z.object({ stockLotId: uuidSchema, quantity: quantitySchema })).max(20),
+});
 
 export const templateInput = z.object({
   clinicalServiceId: uuidSchema,
@@ -192,6 +231,59 @@ export const reconcileInput = z.object({
   inventoryItemId: uuidSchema,
   locationId: uuidSchema,
   apply: z.preprocess((v) => (v === undefined ? false : v), boolish),
+});
+
+// ---------------------------------------------------------------- Sprint 5: lot / SKT
+export const getExpiringLotsInput = z.object({
+  branchId: optUuid,
+  locationId: optUuid,
+  categoryId: optUuid,
+  /** Boşsa klinik ayarı (expiryWarningDays). */
+  days: z.preprocess(blank, z.coerce.number().int().min(1).max(365).optional()),
+  kind: z.enum(["expiring", "expired"]).default("expiring"),
+});
+export type GetExpiringLotsInput = z.input<typeof getExpiringLotsInput>;
+
+export const getStockByLotInput = z.object({
+  inventoryItemId: optUuid,
+  locationId: optUuid,
+  branchId: optUuid,
+  includeEmpty: z.preprocess((v) => (v === undefined ? false : v), boolish),
+});
+export type GetStockByLotInput = z.input<typeof getStockByLotInput>;
+
+export const selectFefoInput = z.object({
+  inventoryItemId: uuidSchema,
+  locationId: uuidSchema,
+  quantity: quantitySchema,
+});
+
+export const findLotTraceInput = z.object({ stockLotId: uuidSchema });
+export type FindLotTraceInput = z.input<typeof findLotTraceInput>;
+
+export const recallLotInput = z.object({ stockLotId: uuidSchema, reason: z.string().trim().min(5).max(500) });
+export const correctLotInput = z.object({
+  stockLotId: uuidSchema,
+  expiryDate: z.string().refine(isValidDate, "invalid date"),
+  reason: z.string().trim().min(5).max(300),
+});
+export const writeOffLotInput = z.object({
+  stockLotId: uuidSchema,
+  /** Boşsa lotun tamamı. */
+  quantity: z.preprocess(blank, quantitySchema.optional()),
+  reason: z.string().trim().min(3).max(300),
+});
+export const physicalCountInput = z.object({
+  inventoryItemId: uuidSchema,
+  locationId: uuidSchema,
+  stockLotId: optUuid,
+  countedQuantity: z.preprocess(
+    (v) => (typeof v === "number" ? String(v) : typeof v === "string" ? v.trim().replace(",", ".") : v),
+    z.string().regex(/^\d{1,9}(\.\d{1,3})?$/),
+  ),
+  /** false → yalnızca karşılaştırma (kuru çalıştırma); true → fark varsa düzeltme hareketi. */
+  apply: z.preprocess((v) => (v === undefined ? false : v), boolish),
+  reason: optText(300),
 });
 
 export { toMilli, fromMilli, formatQuantity } from "@/lib/quantity";

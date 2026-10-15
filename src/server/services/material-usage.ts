@@ -8,11 +8,13 @@ import {
   doctorProfiles,
   inventoryItems,
   inventoryLocations,
+  patientMaterialUsageAllocations,
   patientMaterialUsageItems,
   patientMaterialUsages,
   patients,
   rooms,
   serviceMaterialTemplates,
+  stockLots,
   stockMovements,
   users,
 } from "@/server/db/schema";
@@ -46,9 +48,12 @@ import {
   recordMaterialUsageInput,
   templateInput,
   toMilli,
+  usageAllocationInput,
   usageItemInput,
   voidInput,
 } from "@/server/inventory/contracts";
+import { lotCandidates, loadLotInScope, locationToday, usableLotSum } from "@/server/services/lot-core";
+import { fefoAllocate, fefoOrder, isExpired, type LotAllocation } from "@/server/inventory/fefo";
 
 /**
  * Hasta / randevu bazlı sarf kullanımı.
@@ -211,7 +216,6 @@ async function createUsageInScope(scope: TenantScope, ctx: AuthContext, input: u
           eq(serviceMaterialTemplates.clinicalServiceId, serviceId),
           eq(inventoryItems.active, true),
           eq(inventoryItems.trackInventory, true),
-          eq(inventoryItems.trackLots, false),
         ),
       );
     const loc = tpl.length ? await defaultLocationFor(scope, branchId, roomId) : null;
@@ -260,7 +264,7 @@ async function upsertItemInScope(
       message: "Stok kaynağı kullanımın şubesinde olmalı.",
     });
   }
-  await scope.tx
+  const [row] = await scope.tx
     .insert(patientMaterialUsageItems)
     .values({
       tenantId: scope.tenantId,
@@ -277,7 +281,140 @@ async function upsertItemInScope(
         patientMaterialUsageItems.locationId,
       ],
       set: { quantity: data.quantity },
+    })
+    .returning({ id: patientMaterialUsageItems.id });
+  // Miktar değişti → önceki elle lot seçimi geçersiz (kesinleştirmede yeniden FEFO veya yeni seçim).
+  await scope.tx
+    .delete(patientMaterialUsageAllocations)
+    .where(
+      tenantWhere(
+        patientMaterialUsageAllocations,
+        scope,
+        eq(patientMaterialUsageAllocations.patientUsageItemId, row!.id),
+      ),
+    );
+  return { id: row!.id, trackLots: item.trackLots };
+}
+
+/**
+ * Taslak kalem için ELLE lot seçimi (FEFO'yu geçersiz kılar). Boş liste → seçim temizlenir (kesinleştirmede FEFO).
+ * Taslakta stok DÜŞMEZ; seçim kesinleştirmede kilit altında yeniden doğrulanır. Burada da erken doğrulama yapılır:
+ * lot aynı ürün + aynı lokasyonda olmalı (aksi NOT_FOUND), süresi geçmiş / geri çağrılmış / pasif / yetersiz lot
+ * seçilemez, toplam kalemin miktarına eşit olmalı.
+ */
+async function setItemLotsInScope(
+  scope: TenantScope,
+  ctx: AuthContext,
+  usage: { id: string },
+  itemRowId: string,
+  lots: { stockLotId: string; quantity: string }[],
+) {
+  const [line] = await scope.tx
+    .select({
+      id: patientMaterialUsageItems.id,
+      itemId: patientMaterialUsageItems.inventoryItemId,
+      locationId: patientMaterialUsageItems.locationId,
+      quantity: patientMaterialUsageItems.quantity,
+      trackLots: inventoryItems.trackLots,
+    })
+    .from(patientMaterialUsageItems)
+    .innerJoin(
+      inventoryItems,
+      and(
+        eq(inventoryItems.id, patientMaterialUsageItems.inventoryItemId),
+        eq(inventoryItems.tenantId, patientMaterialUsageItems.tenantId),
+      ),
+    )
+    .where(
+      tenantWhere(
+        patientMaterialUsageItems,
+        scope,
+        eq(patientMaterialUsageItems.id, itemRowId),
+        eq(patientMaterialUsageItems.patientUsageId, usage.id),
+      ),
+    );
+  if (!line) throw new AppError("NOT_FOUND");
+  if (!line.trackLots && lots.length) {
+    throw new AppError("VALIDATION", { fields: ["lots"], message: "Bu ürün lot takipli değil." });
+  }
+  await scope.tx
+    .delete(patientMaterialUsageAllocations)
+    .where(
+      tenantWhere(
+        patientMaterialUsageAllocations,
+        scope,
+        eq(patientMaterialUsageAllocations.patientUsageItemId, line.id),
+      ),
+    );
+  if (!lots.length) return;
+  const ids = lots.map((l) => l.stockLotId);
+  if (new Set(ids).size !== ids.length) {
+    throw new AppError("VALIDATION", { fields: ["lots"], message: "Aynı lot iki kez seçilemez." });
+  }
+  const total = lots.reduce((a, l) => a + toMilli(l.quantity), 0);
+  if (total !== toMilli(line.quantity)) {
+    throw new AppError("VALIDATION", {
+      fields: ["lots"],
+      message: "Lot miktarlarının toplamı kalem miktarına eşit olmalı.",
     });
+  }
+  const { today } = await locationToday(scope, line.locationId);
+  for (const sel of lots) {
+    const lot = await loadLotInScope(scope, ctx, sel.stockLotId);
+    assertLotUsable(lot, line, today, toMilli(sel.quantity));
+    await scope.tx.insert(patientMaterialUsageAllocations).values({
+      tenantId: scope.tenantId,
+      patientUsageItemId: line.id,
+      inventoryItemId: line.itemId,
+      locationId: line.locationId,
+      stockLotId: lot.id,
+      quantity: sel.quantity,
+    });
+  }
+}
+
+/** Hasta kullanımı için lot uygunluğu (servis kontrolü; DB tetikleyicisi aynı kuralları son savunma olarak uygular). */
+function assertLotUsable(
+  lot: {
+    id: string;
+    inventoryItemId: string;
+    locationId: string;
+    recalledAt: Date | null;
+    active: boolean;
+    expiryDate: string | null;
+    quantity: string;
+    lotNumber: string;
+  },
+  line: { itemId: string; locationId: string },
+  today: string,
+  needMilli: number,
+) {
+  if (lot.inventoryItemId !== line.itemId || lot.locationId !== line.locationId)
+    throw new AppError("NOT_FOUND");
+  if (lot.recalledAt) throw new AppError("LOT_RECALLED");
+  if (!lot.active) throw new AppError("VALIDATION", { fields: ["lots"], message: "Lot aktif değil." });
+  if (isExpired(lot.expiryDate, today)) throw new AppError("LOT_EXPIRED");
+  if (toMilli(lot.quantity) < needMilli) {
+    throw new AppError("INSUFFICIENT_STOCK", { message: `Lot ${lot.lotNumber} için yeterli stok yok.` });
+  }
+}
+
+/** Taslak kalemin lot seçimini ayarlar (boş liste = otomatik FEFO). */
+export async function setPatientMaterialUsageItemLots(
+  ctx: AuthContext,
+  rawUsageId: unknown,
+  rawItemRowId: unknown,
+  input: unknown,
+): Promise<void> {
+  requirePermission(ctx, "inventory.usage.create");
+  requirePermission(ctx, "inventory.lot.read");
+  const rowId = parseId(rawItemRowId);
+  const data = parseInput(usageAllocationInput, input);
+  await tenantQuery(ctx, async (scope) => {
+    const u = await loadUsage(scope, ctx, rawUsageId, { forUpdate: true });
+    requireDraft(u);
+    await setItemLotsInScope(scope, ctx, u, rowId, data.lots);
+  });
 }
 
 /** Taslağa kalem ekler / miktarını ayarlar (aynı ürün + lokasyon tek satır). */
@@ -304,6 +441,16 @@ export async function removePatientMaterialUsageItem(
   await tenantQuery(ctx, async (scope) => {
     const u = await loadUsage(scope, ctx, rawUsageId, { forUpdate: true });
     requireDraft(u);
+    // Önce elle lot seçimi (tahsis koruması taslak kalemi görürken çalışır; kaskada bırakılmaz).
+    await scope.tx.delete(patientMaterialUsageAllocations).where(
+      tenantWhere(
+        patientMaterialUsageAllocations,
+        scope,
+        eq(patientMaterialUsageAllocations.patientUsageItemId, rowId),
+        sql`exists (select 1 from kliniva.patient_material_usage_items i where i.tenant_id = ${scope.tenantId}::uuid
+                and i.id = ${rowId}::uuid and i.patient_usage_id = ${u.id}::uuid)`,
+      ),
+    );
     await scope.tx
       .delete(patientMaterialUsageItems)
       .where(
@@ -324,12 +471,14 @@ async function finalizeInScope(scope: TenantScope, ctx: AuthContext, rawId: unkn
   requireDraft(u);
   const items = await scope.tx
     .select({
+      rowId: patientMaterialUsageItems.id,
       itemId: patientMaterialUsageItems.inventoryItemId,
       locationId: patientMaterialUsageItems.locationId,
       quantity: patientMaterialUsageItems.quantity,
       name: inventoryItems.name,
       active: inventoryItems.active,
       trackInventory: inventoryItems.trackInventory,
+      trackLots: inventoryItems.trackLots,
       locationName: inventoryLocations.name,
     })
     .from(patientMaterialUsageItems)
@@ -351,7 +500,8 @@ async function finalizeInScope(scope: TenantScope, ctx: AuthContext, rawId: unkn
   if (!items.length)
     throw new AppError("VALIDATION", { fields: ["items"], message: "Kullanımda hiç malzeme yok." });
 
-  // 1) Tüm kalemler deterministik sırada kilitlenir, 2) HEPSİ kontrol edilir, 3) ancak sonra hareketler eklenir.
+  // 1) Tüm kalemler deterministik sırada kilitlenir, 2) HEPSİ kontrol edilir (lot tahsisi dahil), 3) ancak sonra
+  //    tahsisler + hareketler yazılır. Herhangi bir hata → transaction geri alınır, HİÇBİR stok düşmez.
   await lockStock(scope, items);
   const need = new Map<string, number>();
   for (const it of items)
@@ -359,8 +509,18 @@ async function finalizeInScope(scope: TenantScope, ctx: AuthContext, rawId: unkn
       `${it.itemId}:${it.locationId}`,
       (need.get(`${it.itemId}:${it.locationId}`) ?? 0) + toMilli(it.quantity),
     );
+  const plan = new Map<string, LotAllocation[]>();
+  const todayByLocation = new Map<string, string>();
   for (const it of items) {
     if (!it.trackInventory) continue;
+    if (it.trackLots) {
+      // SKT günü sunucuda, lokasyonun şube saat dilimiyle (istemci tarihine güvenilmez).
+      if (!todayByLocation.has(it.locationId)) {
+        todayByLocation.set(it.locationId, (await locationToday(scope, it.locationId)).today);
+      }
+      plan.set(it.rowId, await allocateLine(scope, ctx, it, todayByLocation.get(it.locationId)!));
+      continue;
+    }
     const have = await balanceMilli(scope, it.itemId, it.locationId);
     if (have < need.get(`${it.itemId}:${it.locationId}`)!) {
       throw new AppError("INSUFFICIENT_STOCK", {
@@ -368,22 +528,55 @@ async function finalizeInScope(scope: TenantScope, ctx: AuthContext, rawId: unkn
       });
     }
   }
+  let allocationCount = 0;
+  const lotIds = new Set<string>();
   for (const it of items) {
     if (!it.trackInventory) continue;
+    const base = {
+      tenantId: scope.tenantId,
+      inventoryItemId: it.itemId,
+      movementType: "PATIENT_USAGE" as const,
+      fromLocationId: it.locationId,
+      patientId: u.patientId,
+      appointmentId: u.appointmentId,
+      patientUsageId: u.id,
+      createdByUserId: ctx.userId,
+    };
+    const allocs = plan.get(it.rowId);
+    if (!allocs) {
+      await scope.tx
+        .insert(stockMovements)
+        .values({ ...base, quantity: it.quantity })
+        .catch(mapMovementError);
+      continue;
+    }
+    // Kesin tahsis: önceki elle seçim yerine gerçek tahsis yazılır (usage hâlâ DRAFT → tetikleyici izin verir).
     await scope.tx
-      .insert(stockMovements)
-      .values({
+      .delete(patientMaterialUsageAllocations)
+      .where(
+        tenantWhere(
+          patientMaterialUsageAllocations,
+          scope,
+          eq(patientMaterialUsageAllocations.patientUsageItemId, it.rowId),
+        ),
+      );
+    for (const a of allocs) {
+      const qty = fromMilli(a.quantityMilli);
+      await scope.tx.insert(patientMaterialUsageAllocations).values({
         tenantId: scope.tenantId,
+        patientUsageItemId: it.rowId,
         inventoryItemId: it.itemId,
-        movementType: "PATIENT_USAGE",
-        fromLocationId: it.locationId,
-        quantity: it.quantity,
-        patientId: u.patientId,
-        appointmentId: u.appointmentId,
-        patientUsageId: u.id,
-        createdByUserId: ctx.userId,
-      })
-      .catch(mapMovementError);
+        locationId: it.locationId,
+        stockLotId: a.lotId,
+        quantity: qty,
+      });
+      await scope.tx
+        .insert(stockMovements)
+        .values({ ...base, quantity: qty, fromStockLotId: a.lotId })
+        .catch(mapMovementError);
+      allocationCount++;
+      lotIds.add(a.lotId);
+    }
   }
   const now = new Date();
   await scope.tx
@@ -397,7 +590,78 @@ async function finalizeInScope(scope: TenantScope, ctx: AuthContext, rawId: unkn
     { ...u, status: "FINALIZED" },
     { itemCount: items.length },
   );
+  if (allocationCount) {
+    // Lot izlenebilirliği: kullanım kimliği + sayılar. Hasta kimliği bu kayda YAZILMAZ.
+    await writeAudit(scope, actorOf(ctx), {
+      action: "PATIENT_LOT_USAGE_FINALIZED",
+      entityType: "patient_material_usage",
+      entityId: u.id,
+      branchId: u.branchId,
+      metadata: { patientUsageId: u.id, allocationCount, lots: lotIds.size },
+    });
+  }
   return u.id;
+}
+
+/**
+ * Lot takipli kalemin tahsisi — KİLİT ALTINDA güncel lot verisiyle:
+ *  - elle seçim varsa: her lot yeniden doğrulanır (SKT / geri çağırma / aktiflik / miktar) ve toplam = kalem miktarı;
+ *  - yoksa otomatik FEFO (birden fazla lot kullanılabilir); kullanılabilir toplam yetmezse INSUFFICIENT_STOCK.
+ */
+async function allocateLine(
+  scope: TenantScope,
+  ctx: AuthContext,
+  it: {
+    rowId: string;
+    itemId: string;
+    locationId: string;
+    quantity: string;
+    name: string;
+    locationName: string;
+  },
+  today: string,
+): Promise<LotAllocation[]> {
+  const needMilli = toMilli(it.quantity);
+  const manual = await scope.tx
+    .select({
+      lotId: patientMaterialUsageAllocations.stockLotId,
+      quantity: patientMaterialUsageAllocations.quantity,
+    })
+    .from(patientMaterialUsageAllocations)
+    .where(
+      tenantWhere(
+        patientMaterialUsageAllocations,
+        scope,
+        eq(patientMaterialUsageAllocations.patientUsageItemId, it.rowId),
+      ),
+    );
+  if (manual.length) {
+    if (manual.reduce((a, m) => a + toMilli(m.quantity), 0) !== needMilli) {
+      throw new AppError("VALIDATION", {
+        fields: ["lots"],
+        message: `${it.name}: lot seçimi kalem miktarıyla uyuşmuyor.`,
+      });
+    }
+    const out: LotAllocation[] = [];
+    for (const m of manual) {
+      const lot = await loadLotInScope(scope, ctx, m.lotId);
+      assertLotUsable(lot, it, today, toMilli(m.quantity));
+      out.push({
+        lotId: lot.id,
+        lotNumber: lot.lotNumber,
+        expiryDate: lot.expiryDate,
+        quantityMilli: toMilli(m.quantity),
+      });
+    }
+    return out;
+  }
+  const res = fefoAllocate(await lotCandidates(scope, it.itemId, it.locationId), needMilli, today);
+  if (res.shortfallMilli > 0) {
+    throw new AppError("INSUFFICIENT_STOCK", {
+      message: `${it.name} için ${it.locationName} lokasyonunda kullanılabilir (SKT'si geçmemiş, geri çağrılmamış) lot stoğu yetersiz.`,
+    });
+  }
+  return res.allocations;
 }
 
 export async function finalizePatientMaterialUsage(ctx: AuthContext, rawId: unknown): Promise<void> {
@@ -445,6 +709,8 @@ export async function voidPatientMaterialUsage(
             inventoryItemId: m.inventoryItemId,
             movementType: "RETURN_FROM_PATIENT_USAGE",
             toLocationId: m.fromLocationId,
+            // Lot takipli: stok AYNI lota döner (geri çağrılmış / süresi geçmiş olsa bile — fiziksel iade).
+            toStockLotId: m.fromStockLotId,
             quantity: m.quantity,
             patientId: m.patientId,
             appointmentId: m.appointmentId,
@@ -493,11 +759,16 @@ export async function recordMaterialUsage(
       const locationId =
         it.locationId ?? (await defaultLocationFor(scope, u.branchId, await roomOf(scope, u.id)));
       if (!locationId) throw new AppError("VALIDATION", { fields: ["locationId"] });
-      await upsertItemInScope(scope, ctx, u, {
+      const line = await upsertItemInScope(scope, ctx, u, {
         inventoryItemId: it.inventoryItemId,
         quantity: it.quantity,
         locationId,
       });
+      // Elle lot seçimi (yoksa kesinleştirmede FEFO).
+      if (it.lots?.length) {
+        requirePermission(ctx, "inventory.lot.read");
+        await setItemLotsInScope(scope, ctx, u, line.id, it.lots);
+      }
     }
     if (data.finalize) await finalizeInScope(scope, ctx, u.id);
     return { id: u.id, finalized: data.finalize };
@@ -522,7 +793,24 @@ export type UsageItemView = {
   locationId: string;
   locationName: string;
   quantity: string;
+  /** Kullanılabilir stok (lot takipli üründe SKT geçmiş / geri çağrılmış lotlar hariç). */
   available: string;
+  trackLots: boolean;
+  /** Kesinleşmiş tahsis veya taslaktaki elle seçim. */
+  allocations: UsageLotLine[];
+  /** Taslakta elle seçim yoksa: otomatik FEFO önerisi (stok düşmez; kesinleştirmede yeniden hesaplanır). */
+  suggested: UsageLotLine[];
+  /** Elle seçim için kullanılabilir lotlar (FEFO sırasında). */
+  lotOptions: (UsageLotLine & { available: string })[];
+  /** Taslak: öneri karşılanamıyor (kullanılabilir lot stoğu yetersiz). */
+  shortfall: boolean;
+};
+
+export type UsageLotLine = {
+  stockLotId: string;
+  lotNumber: string;
+  expiryDate: string | null;
+  quantity: string;
 };
 
 export type UsageListItem = {
@@ -536,8 +824,43 @@ export type UsageListItem = {
   roomName: string | null;
   doctorName: string | null;
   patient: { id: string; name: string; patientNumber: string };
-  items: { itemName: string; unit: string; quantity: string }[];
+  items: {
+    itemName: string;
+    unit: string;
+    quantity: string;
+    /** Hasta izlenebilirliği: kullanılan lot numaraları (yalnızca inventory.lot.read). */
+    lots: { lotNumber: string; expiryDate: string | null; quantity: string }[];
+  }[];
 };
+
+/** Kalem satırlarının tahsisleri (lot numarasıyla). */
+async function allocationsFor(scope: TenantScope, rowIds: string[]) {
+  if (!rowIds.length) return [];
+  return scope.tx
+    .select({
+      rowId: patientMaterialUsageAllocations.patientUsageItemId,
+      stockLotId: stockLots.id,
+      lotNumber: stockLots.lotNumber,
+      expiryDate: stockLots.expiryDate,
+      quantity: patientMaterialUsageAllocations.quantity,
+    })
+    .from(patientMaterialUsageAllocations)
+    .innerJoin(
+      stockLots,
+      and(
+        eq(stockLots.id, patientMaterialUsageAllocations.stockLotId),
+        eq(stockLots.tenantId, patientMaterialUsageAllocations.tenantId),
+      ),
+    )
+    .where(
+      tenantWhere(
+        patientMaterialUsageAllocations,
+        scope,
+        inArray(patientMaterialUsageAllocations.patientUsageItemId, rowIds),
+      ),
+    )
+    .orderBy(asc(stockLots.expiryDate), asc(stockLots.lotNumber));
+}
 
 async function listUsagesInScope(
   scope: TenantScope,
@@ -603,6 +926,7 @@ async function listUsagesInScope(
   const lines = ids.length
     ? await scope.tx
         .select({
+          rowId: patientMaterialUsageItems.id,
           usageId: patientMaterialUsageItems.patientUsageId,
           itemName: inventoryItems.name,
           unit: inventoryItems.unit,
@@ -625,6 +949,12 @@ async function listUsagesInScope(
         )
         .orderBy(asc(inventoryItems.name))
     : [];
+  const allocs = hasPermission(ctx, "inventory.lot.read")
+    ? await allocationsFor(
+        scope,
+        lines.map((l) => l.rowId),
+      )
+    : [];
   return rows.map((r) => ({
     id: r.id,
     status: r.status,
@@ -640,7 +970,14 @@ async function listUsagesInScope(
     patient: { id: r.patientId, name: `${r.patientFirst} ${r.patientLast}`, patientNumber: r.patientNumber },
     items: lines
       .filter((l) => l.usageId === r.id)
-      .map(({ itemName, unit, quantity }) => ({ itemName, unit, quantity })),
+      .map(({ rowId, itemName, unit, quantity }) => ({
+        itemName,
+        unit,
+        quantity,
+        lots: allocs
+          .filter((a) => a.rowId === rowId)
+          .map(({ lotNumber, expiryDate, quantity: q }) => ({ lotNumber, expiryDate, quantity: q })),
+      })),
   }));
 }
 
@@ -679,10 +1016,15 @@ export async function getPatientMaterialUsage(ctx: AuthContext, rawId: unknown) 
         locationId: patientMaterialUsageItems.locationId,
         locationName: inventoryLocations.name,
         quantity: patientMaterialUsageItems.quantity,
-        available: sql<string>`coalesce((select b.quantity from kliniva.stock_balances b
+        trackLots: inventoryItems.trackLots,
+        available: sql<string>`case when ${inventoryItems.trackLots} then ${usableLotSum(
+          sql`kliniva.patient_material_usage_items.tenant_id`,
+          sql`kliniva.patient_material_usage_items.inventory_item_id`,
+          sql`kliniva.patient_material_usage_items.location_id`,
+        )} else coalesce((select b.quantity from kliniva.stock_balances b
           where b.tenant_id = kliniva.patient_material_usage_items.tenant_id
             and b.inventory_item_id = kliniva.patient_material_usage_items.inventory_item_id
-            and b.location_id = kliniva.patient_material_usage_items.location_id), 0)`,
+            and b.location_id = kliniva.patient_material_usage_items.location_id), 0) end`,
       })
       .from(patientMaterialUsageItems)
       .innerJoin(
@@ -703,13 +1045,61 @@ export async function getPatientMaterialUsage(ctx: AuthContext, rawId: unknown) 
         tenantWhere(patientMaterialUsageItems, scope, eq(patientMaterialUsageItems.patientUsageId, u.id)),
       )
       .orderBy(asc(inventoryItems.name));
+    const canLots = hasPermission(ctx, "inventory.lot.read");
+    const allocs = canLots
+      ? await allocationsFor(
+          scope,
+          lines.map((l) => l.id),
+        )
+      : [];
+    const views: UsageItemView[] = [];
+    for (const l of lines) {
+      const view: UsageItemView = {
+        ...l,
+        available: String(l.available),
+        allocations: allocs
+          .filter((a) => a.rowId === l.id)
+          .map(({ stockLotId, lotNumber, expiryDate, quantity }) => ({
+            stockLotId,
+            lotNumber,
+            expiryDate,
+            quantity,
+          })),
+        suggested: [],
+        lotOptions: [],
+        shortfall: false,
+      };
+      // Taslak: FEFO önizlemesi + elle seçim seçenekleri (stok düşmez; kesinleştirmede sunucu yeniden hesaplar).
+      if (canLots && l.trackLots && u.status === "DRAFT") {
+        const { today } = await locationToday(scope, l.locationId);
+        const cands = await lotCandidates(scope, l.inventoryItemId, l.locationId);
+        view.lotOptions = fefoOrder(cands, today).map((c) => ({
+          stockLotId: c.id,
+          lotNumber: c.lotNumber,
+          expiryDate: c.expiryDate,
+          quantity: fromMilli(c.quantityMilli),
+          available: fromMilli(c.quantityMilli),
+        }));
+        if (!view.allocations.length) {
+          const res = fefoAllocate(cands, toMilli(l.quantity), today);
+          view.shortfall = res.shortfallMilli > 0;
+          view.suggested = res.allocations.map((a) => ({
+            stockLotId: a.lotId,
+            lotNumber: a.lotNumber,
+            expiryDate: a.expiryDate,
+            quantity: fromMilli(a.quantityMilli),
+          }));
+        }
+      }
+      views.push(view);
+    }
     return {
       ...summary!,
       branchId: u.branchId,
       roomId: u.roomId,
       voidReason: u.voidReason,
       notes: u.notesEncrypted ? decryptField(u.notesEncrypted, notesAad(scope.tenantId, u.id)) : null,
-      lines: lines.map((l) => ({ ...l, available: String(l.available) })) as UsageItemView[],
+      lines: views,
     };
   });
 }

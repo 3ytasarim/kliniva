@@ -13,7 +13,13 @@ export type MaterialUsageRow = {
   branchName: string;
   roomName: string | null;
   doctorName: string | null;
-  items: { itemName: string; unit: string; quantity: string }[];
+  items: {
+    itemName: string;
+    unit: string;
+    quantity: string;
+    /** Hasta izlenebilirliği: kullanılan lot numaraları (yalnızca lot görüntüleme yetkisiyle dolu). */
+    lots?: { lotNumber: string; quantity: string }[];
+  }[];
 };
 
 export function MaterialUsageList({
@@ -65,13 +71,26 @@ export function MaterialUsageList({
                 {u.roomName ? ` · ${u.roomName}` : ""}
               </td>
               <td className="text-sm">
-                {u.items.length
-                  ? u.items
-                      .map((i) =>
-                        `${i.itemName} ×${formatQuantity(i.quantity)} ${UNIT_LABELS[i.unit] ?? ""}`.trim(),
-                      )
-                      .join(", ")
-                  : "—"}
+                {u.items.length ? (
+                  <ul className="grid gap-1">
+                    {u.items.map((i, n) => (
+                      <li key={n}>
+                        {`${i.itemName} ×${formatQuantity(i.quantity)} ${UNIT_LABELS[i.unit] ?? ""}`.trim()}
+                        {i.lots?.length ? (
+                          <span
+                            className="block font-mono text-xs text-slate-500"
+                            data-testid="material-lots"
+                          >
+                            Lot:{" "}
+                            {i.lots.map((l) => `${l.lotNumber} ×${formatQuantity(l.quantity)}`).join(", ")}
+                          </span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  "—"
+                )}
               </td>
               <td>
                 <UsageStatusBadge status={u.status} />

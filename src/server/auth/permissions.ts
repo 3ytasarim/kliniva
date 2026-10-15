@@ -60,6 +60,15 @@ export const PERMISSIONS = {
   "inventory.usage.void": "Kesinleşmiş malzeme kullanımını geçersiz kılma (ters hareket)",
   "inventory.low_stock.read": "Kritik stok raporunu görüntüleme",
   "inventory.reconcile": "Stok bakiyesi doğrulama / uzlaştırma",
+  // Sprint 5 — lot / SKT
+  "inventory.lot.read": "Lotları ve son kullanma tarihlerini görüntüleme",
+  "inventory.lot.manage": "Lotlu stok girişi / transfer / düzeltme",
+  "inventory.lot.correct_metadata": "Lot SKT düzeltmesi (yüksek yetki)",
+  "inventory.lot.recall": "Lotu geri çağırma (geri alınamaz)",
+  "inventory.lot.trace": "Lotun kullanıldığı hastaları izleme (geri çağırma için)",
+  "inventory.expiry.read": "SKT yaklaşan / geçmiş stok raporu",
+  "inventory.write_off": "Fire / imha (SKT geçmiş stok dahil)",
+  "inventory.physical_count": "Fiziksel sayım ve sayım farkı düzeltmesi",
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;
@@ -114,6 +123,14 @@ const INVENTORY_MANAGE: Permission[] = [
   "inventory.low_stock.read",
   "inventory.usage.read",
 ];
+/** Lot / SKT operasyonları (geri çağırma, SKT düzeltme ve hasta izleme HARİÇ). */
+const LOT_OPERATE: Permission[] = [
+  "inventory.lot.read",
+  "inventory.lot.manage",
+  "inventory.expiry.read",
+  "inventory.write_off",
+  "inventory.physical_count",
+];
 /** Hasta malzeme kullanımı (VOID hariç). */
 const INVENTORY_USAGE: Permission[] = [
   "inventory.read",
@@ -153,6 +170,10 @@ const ADMIN_BASE: Permission[] = [
   "inventory.transfer.cross_branch",
   "inventory.usage.void",
   "inventory.reconcile",
+  ...LOT_OPERATE,
+  "inventory.lot.correct_metadata",
+  "inventory.lot.recall",
+  "inventory.lot.trace",
 ];
 
 export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permission[] }> = {
@@ -182,9 +203,10 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       "doctor.schedule.manage",
       "service.read",
       ...APPOINTMENT_FULL,
-      // Şube müdürü: kendi şubesinde stok + kullanım; şubeler arası transfer ve VOID YOK.
+      // Şube müdürü: kendi şubesinde stok + kullanım + lot; şubeler arası transfer, VOID, geri çağırma, izleme YOK.
       ...INVENTORY_MANAGE,
       ...INVENTORY_USAGE,
+      ...LOT_OPERATE,
     ],
   },
   // Doktor: hasta kaydı açmaz / belge imzalatmaz (resepsiyon akışı). Tıbbi notu yazabilmesi için patient.update.
@@ -208,7 +230,9 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       "appointment.complete",
       "appointment.availability.read",
       // Malzeme: yalnızca KENDİ randevusuna bağlı kullanım (servis, doktorun kendi kaydıyla sınırlar).
+      // Lotları kullanım sırasında görür; geri çağırma / hasta izleme YOK.
       ...INVENTORY_USAGE,
+      "inventory.lot.read",
     ],
   },
   ASSISTANT: {
@@ -228,6 +252,7 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       "appointment.availability.read",
       ...INVENTORY_USAGE,
       "inventory.low_stock.read",
+      "inventory.lot.read",
     ],
   },
   RECEPTION: {
@@ -252,6 +277,7 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       "appointment.availability.read",
       "inventory.read",
       "inventory.low_stock.read",
+      "inventory.lot.read",
     ],
   },
   INVENTORY_MANAGER: {
@@ -263,6 +289,7 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       "service.read",
       ...INVENTORY_MANAGE,
       "inventory.transfer.cross_branch",
+      ...LOT_OPERATE,
     ],
   },
   READ_ONLY: {

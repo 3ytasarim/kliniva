@@ -19,18 +19,31 @@ import {
   createPatientMaterialUsage,
   finalizePatientMaterialUsage,
   removePatientMaterialUsageItem,
+  setPatientMaterialUsageItemLots,
   setServiceMaterialTemplates,
   voidPatientMaterialUsage,
 } from "@/server/services/material-usage";
+import { correctLotMetadata, recallLot, recordPhysicalCount, writeOffLot } from "@/server/services/lots";
+import { formatQuantity } from "@/lib/quantity";
 
 /**
  * Stok server action'ları — ince sarmalayıcı: requireUser() → uygulama servisi (yetki, kapsam, kilit, audit).
  */
-const revalidateInventory = (itemId?: string) => {
+const revalidateInventory = (itemId?: string, lotId?: string) => {
   revalidatePath("/inventory");
   revalidatePath("/inventory/items");
+  revalidatePath("/inventory/expiry");
   if (itemId) revalidatePath(`/inventory/items/${itemId}`);
+  if (lotId) revalidatePath(`/inventory/lots/${lotId}`);
 };
+
+/** Lot takipli formlarda kaynak "lokasyon:lot" çifti tek seçimle gelir → iki alana ayrılır. */
+function withLotRef(data: Record<string, string>, locKey: string, lotKey: string): Record<string, string> {
+  const { lotRef, ...rest } = data;
+  if (!lotRef) return rest;
+  const [loc, lot] = lotRef.split(":");
+  return { ...rest, [locKey]: loc ?? "", [lotKey]: lot ?? "" };
+}
 
 export async function createCategoryAction(_p: ActionState, form: FormData): Promise<ActionState> {
   return runAction(async () => {
@@ -51,7 +64,12 @@ export async function createItemAction(_p: ActionState, form: FormData): Promise
 export async function updateItemAction(_p: ActionState, form: FormData): Promise<ActionState> {
   return runAction(async () => {
     const { id, ...rest } = formToObject(form);
-    await updateInventoryItem(await requireUser(), id, { ...rest, active: form.get("active") === "on" });
+    await updateInventoryItem(await requireUser(), id, {
+      ...rest,
+      active: form.get("active") === "on",
+      trackLots: form.get("trackLots") === "on",
+      trackExpiry: form.get("trackExpiry") === "on",
+    });
     revalidateInventory(id);
     return "Ürün güncellendi.";
   });
@@ -68,7 +86,7 @@ export async function addStockAction(_p: ActionState, form: FormData): Promise<A
 
 export async function adjustStockAction(_p: ActionState, form: FormData): Promise<ActionState> {
   return runAction(async () => {
-    const data = formToObject(form);
+    const data = withLotRef(formToObject(form), "locationId", "stockLotId");
     const r = await adjustStock(await requireUser(), data);
     revalidateInventory(data.inventoryItemId);
     return `Düzeltme kaydedildi. Yeni bakiye: ${Number(r.balance)}.`;
@@ -77,7 +95,7 @@ export async function adjustStockAction(_p: ActionState, form: FormData): Promis
 
 export async function transferStockAction(_p: ActionState, form: FormData): Promise<ActionState> {
   return runAction(async () => {
-    const data = formToObject(form);
+    const data = withLotRef(formToObject(form), "fromLocationId", "fromStockLotId");
     await transferStock(await requireUser(), data);
     revalidateInventory(data.inventoryItemId);
     return "Transfer tamamlandı.";
@@ -180,5 +198,70 @@ export async function setTemplateAction(_p: ActionState, form: FormData): Promis
     await setServiceMaterialTemplates(await requireUser(), { clinicalServiceId, items });
     revalidatePath("/inventory/templates");
     return "Malzeme şablonu kaydedildi (yalnızca öneri; stok düşürmez).";
+  });
+}
+
+/** Taslak kalem için elle lot seçimi. Form: usageId, rowId, lot_<stockLotId> = miktar (boşlar yok sayılır).
+ *  mode=auto → seçim temizlenir (kesinleştirmede otomatik FEFO). */
+export async function setUsageLotsAction(_p: ActionState, form: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const usageId = String(form.get("usageId") ?? "");
+    const rowId = String(form.get("rowId") ?? "");
+    const lots =
+      form.get("mode") === "auto"
+        ? []
+        : [...form.entries()]
+            .filter(
+              ([k, v]) =>
+                k.startsWith("lot_") && String(v).trim() !== "" && Number(String(v).replace(",", ".")) > 0,
+            )
+            .map(([k, v]) => ({ stockLotId: k.slice(4), quantity: String(v) }));
+    await setPatientMaterialUsageItemLots(await requireUser(), usageId, rowId, { lots });
+    revalidatePath(`/inventory/usages/${usageId}`);
+    return lots.length ? "Lot seçimi kaydedildi." : "Otomatik FEFO seçimine dönüldü.";
+  });
+}
+
+// ---------------------------------------------------------------- lot / SKT
+
+export async function recallLotAction(_p: ActionState, form: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const data = formToObject(form);
+    const r = await recallLot(await requireUser(), data);
+    revalidateInventory(data.inventoryItemId, data.stockLotId);
+    return `Lot geri çağrıldı (${r.affectedLots} lokasyon). Yeni kullanım ve transfer engellendi.`;
+  });
+}
+
+export async function correctLotAction(_p: ActionState, form: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const data = formToObject(form);
+    await correctLotMetadata(await requireUser(), data);
+    revalidateInventory(data.inventoryItemId, data.stockLotId);
+    return "SKT düzeltildi.";
+  });
+}
+
+export async function writeOffLotAction(_p: ActionState, form: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const data = formToObject(form);
+    const r = await writeOffLot(await requireUser(), data);
+    revalidateInventory(data.inventoryItemId, data.stockLotId);
+    return `İmha kaydedildi. Kalan: ${formatQuantity(r.remaining)}.`;
+  });
+}
+
+/** Fiziksel sayım: onay kutusu işaretli değilse yalnızca karşılaştırma (kayıt yok). */
+export async function physicalCountAction(_p: ActionState, form: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const data = withLotRef(formToObject(form), "locationId", "stockLotId");
+    const apply = form.get("apply") === "on";
+    const r = await recordPhysicalCount(await requireUser(), { ...data, apply });
+    if (apply) revalidateInventory(data.inventoryItemId, data.stockLotId);
+    const cmp = `Beklenen ${formatQuantity(r.expected)}, sayılan ${formatQuantity(r.counted)}, fark ${r.difference.startsWith("-") ? "−" : "+"}${formatQuantity(r.difference.replace("-", ""))}.`;
+    if (!apply) return `${cmp} Kaydetmek için farkı onaylayın.`;
+    return r.movementId
+      ? `${cmp} Sayım kaydedildi; düzeltme hareketi oluşturuldu.`
+      : `${cmp} Sayım kaydedildi; fark yok.`;
   });
 }

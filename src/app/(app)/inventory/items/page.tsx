@@ -117,6 +117,9 @@ export default async function InventoryItemsPage({ searchParams }: { searchParam
                     <Link href={`/inventory/items/${i.id}`} className="hover:text-brand-700">
                       {i.name}
                     </Link>
+                    {i.trackLots ? (
+                      <span className="badge badge-gray ml-2">{i.trackExpiry ? "Lot · SKT" : "Lot"}</span>
+                    ) : null}
                   </td>
                   <td>{i.categoryName ?? "—"}</td>
                   <td>{UNIT_LABELS[i.unit]}</td>
@@ -126,8 +129,10 @@ export default async function InventoryItemsPage({ searchParams }: { searchParam
                   <td>
                     {!i.trackInventory ? (
                       "—"
-                    ) : Number(i.totalStock) === 0 ? (
-                      <span className="badge badge-red">Tükendi</span>
+                    ) : Number(i.usableStock) === 0 ? (
+                      <span className="badge badge-red">
+                        {Number(i.totalStock) > 0 ? "Kullanılabilir yok" : "Tükendi"}
+                      </span>
                     ) : i.lowStock ? (
                       <span className="badge badge-amber">Düşük</span>
                     ) : (
@@ -204,6 +209,18 @@ export default async function InventoryItemsPage({ searchParams }: { searchParam
                 hint="Bu seviyeye inen lokasyonlar kritik stokta görünür."
               />
               <Field label="Açıklama" name="description" idPrefix="ni" className="sm:col-span-2" />
+              <fieldset className="grid gap-2 sm:col-span-2">
+                <legend className="label">Lot / SKT takibi</legend>
+                <label className="flex min-h-10 items-center gap-2 text-sm">
+                  <input type="checkbox" name="trackLots" id="ni-trackLots" />
+                  Lot / parti takibi (her girişte lot numarası istenir)
+                </label>
+                <label className="flex min-h-10 items-center gap-2 text-sm">
+                  <input type="checkbox" name="trackExpiry" id="ni-trackExpiry" />
+                  Son kullanma tarihi (SKT) takibi — lot takibi gerektirir
+                </label>
+                <p className="hint">Stok girildikten sonra lot takibi açılamaz / kapatılamaz.</p>
+              </fieldset>
             </ActionForm>
           </div>
           <div className="card">

@@ -106,6 +106,31 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
         ))}
       </div>
 
+      {d.lotCards ? (
+        <div className="mb-6 grid gap-4 sm:grid-cols-3" aria-label="Lot ve SKT özeti">
+          <Link href="/inventory/expiry" className="card hover:border-brand-300">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              SKT&apos;si yaklaşan lot
+            </p>
+            <p className="mt-2 text-3xl font-bold tabular-nums">{d.lotCards.expiringSoon}</p>
+          </Link>
+          <Link href="/inventory/expiry?tab=expired" className="card hover:border-brand-300">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              SKT&apos;si geçmiş lot
+            </p>
+            <p
+              className={`mt-2 text-3xl font-bold tabular-nums ${d.lotCards.expired ? "text-red-700 dark:text-red-400" : ""}`}
+            >
+              {d.lotCards.expired}
+            </p>
+          </Link>
+          <Link href="/inventory/items" className="card hover:border-brand-300">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Lot takipli ürün</p>
+            <p className="mt-2 text-3xl font-bold tabular-nums">{d.lotCards.lotTrackedItems}</p>
+          </Link>
+        </div>
+      ) : null}
+
       {canLow ? (
         <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <div className="card overflow-x-auto p-0">
@@ -118,7 +143,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
                   <tr>
                     <th scope="col">Ürün</th>
                     <th scope="col">Lokasyon</th>
-                    <th scope="col">Mevcut</th>
+                    <th scope="col">Kullanılabilir</th>
                     <th scope="col">Asgari</th>
                   </tr>
                 </thead>
@@ -140,9 +165,16 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
                         </span>
                       </td>
                       <td className="tabular-nums">
-                        <span className={`badge ${Number(r.quantity) === 0 ? "badge-red" : "badge-amber"}`}>
-                          {formatQuantity(r.quantity)} {UNIT_LABELS[r.unit]}
+                        <span
+                          className={`badge ${Number(r.usableQuantity) === 0 ? "badge-red" : "badge-amber"}`}
+                        >
+                          {formatQuantity(r.usableQuantity)} {UNIT_LABELS[r.unit]}
                         </span>
+                        {r.trackLots && r.usableQuantity !== r.quantity ? (
+                          <span className="ml-2 text-xs text-slate-500">
+                            (fiziksel {formatQuantity(r.quantity)})
+                          </span>
+                        ) : null}
                       </td>
                       <td className="tabular-nums">{formatQuantity(r.minimumStockLevel)}</td>
                     </tr>

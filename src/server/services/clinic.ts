@@ -41,6 +41,11 @@ export const clinicProfileSchema = z.object({
     (v) => (v === "" || v === undefined ? undefined : Number(v)),
     z.number().int().min(5).max(480).optional(),
   ),
+  /** "SKT'si yaklaşan" penceresi (gün) — stok SKT raporu ve panel kartı. */
+  expiryWarningDays: z.preprocess(
+    (v) => (v === "" || v === undefined ? undefined : Number(v)),
+    z.number().int().min(1).max(365).optional(),
+  ),
 });
 
 export type ClinicProfileView = {
@@ -55,6 +60,7 @@ export type ClinicProfileView = {
   country: string;
   timezone: string;
   defaultAppointmentDurationMinutes: number;
+  expiryWarningDays: number;
   hasLogo: boolean;
   updatedAt: Date | null;
 };
@@ -89,6 +95,7 @@ export async function getClinicProfile(ctx: AuthContext): Promise<ClinicProfileV
       country: "TR",
       timezone: "Europe/Istanbul",
       defaultAppointmentDurationMinutes: 30,
+      expiryWarningDays: 30,
       hasLogo: false,
       updatedAt: null,
     };
@@ -116,6 +123,7 @@ export async function upsertClinicProfile(ctx: AuthContext, input: unknown): Pro
     country: data.country ?? "TR",
     timezone: data.timezone ?? "Europe/Istanbul",
     defaultAppointmentDurationMinutes: data.defaultAppointmentDurationMinutes ?? 30,
+    expiryWarningDays: data.expiryWarningDays ?? 30,
   };
   await tenantQuery(ctx, async (scope) => {
     const existing = await loadProfile(scope);

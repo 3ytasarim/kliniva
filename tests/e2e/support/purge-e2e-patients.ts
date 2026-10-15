@@ -44,11 +44,16 @@ async function main() {
       );
     const itemCond = items.length ? sql`inventory_item_id in (${uuidList(items)})` : sql`false`;
     const patientCond = ids.length ? sql`patient_id in (${uuidList(ids)})` : sql`false`;
+    await tx.execute(sql`delete from kliniva.patient_material_usage_allocations where tenant_id = ${t.id} and (${itemCond}
+      or patient_usage_item_id in (select i.id from kliniva.patient_material_usage_items i
+        where i.tenant_id = ${t.id} and i.patient_usage_id in
+          (select id from kliniva.patient_material_usages where tenant_id = ${t.id} and ${patientCond})))`);
     await tx.execute(sql`delete from kliniva.patient_material_usage_items where tenant_id = ${t.id} and (${itemCond}
       or patient_usage_id in (select id from kliniva.patient_material_usages where tenant_id = ${t.id} and ${patientCond}))`);
     await tx.execute(sql`delete from kliniva.stock_movements where tenant_id = ${t.id} and (${itemCond}
       or patient_usage_id in (select id from kliniva.patient_material_usages where tenant_id = ${t.id} and ${patientCond}))`);
     await tx.execute(sql`delete from kliniva.stock_balances where tenant_id = ${t.id} and ${itemCond}`);
+    await tx.execute(sql`delete from kliniva.stock_lots where tenant_id = ${t.id} and ${itemCond}`);
     await tx.execute(
       sql`delete from kliniva.patient_material_usages where tenant_id = ${t.id} and ${patientCond}`,
     );

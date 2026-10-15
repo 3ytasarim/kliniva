@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Fragment } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/server/auth/guards";
@@ -10,12 +11,13 @@ import {
   addUsageItemAction,
   finalizeUsageAction,
   removeUsageItemAction,
+  setUsageLotsAction,
   voidUsageAction,
 } from "@/app/actions/inventory";
 import { ActionForm, Field, InlineAction, SelectField } from "@/components/action-form";
 import { Forbidden } from "@/components/forbidden";
 import { PageHeader } from "@/components/ui";
-import { UNIT_LABELS, UsageStatusBadge } from "@/components/inventory-ui";
+import { UNIT_LABELS, UsageStatusBadge, formatExpiry } from "@/components/inventory-ui";
 import { formatDateTime } from "@/components/patient-ui";
 import { formatQuantity } from "@/lib/quantity";
 
@@ -43,6 +45,15 @@ export default async function UsagePage({ params }: { params: Promise<{ id: stri
     ? (await listInventoryItems(ctx, { limit: 100 })).items.filter((i) => i.trackInventory)
     : [];
   const short = u.lines.filter((l) => Number(l.available) < Number(l.quantity));
+  const canLots = hasPermission(ctx, "inventory.lot.read");
+  const cols = 3 + (draft ? 1 : 0) + (canEdit ? 1 : 0);
+  const lotText = (xs: { lotNumber: string; expiryDate: string | null; quantity: string }[]) =>
+    xs
+      .map(
+        (a) =>
+          `${a.lotNumber}${a.expiryDate ? ` (SKT ${formatExpiry(a.expiryDate)})` : ""} × ${formatQuantity(a.quantity)}`,
+      )
+      .join(", ");
 
   return (
     <section className="grid gap-6">
@@ -85,56 +96,127 @@ export default async function UsagePage({ params }: { params: Promise<{ id: stri
                 </thead>
                 <tbody>
                   {u.lines.map((l) => (
-                    <tr key={l.id}>
-                      <td className="font-medium">{l.itemName}</td>
-                      <td>{l.locationName}</td>
-                      <td>
+                    <Fragment key={l.id}>
+                      <tr>
+                        <td className="font-medium">{l.itemName}</td>
+                        <td>{l.locationName}</td>
+                        <td>
+                          {canEdit ? (
+                            <ActionForm
+                              action={addUsageItemAction}
+                              submitLabel="Güncelle"
+                              className="flex flex-wrap items-center gap-2"
+                            >
+                              <input type="hidden" name="usageId" value={u.id} />
+                              <input type="hidden" name="inventoryItemId" value={l.inventoryItemId} />
+                              <input type="hidden" name="locationId" value={l.locationId} />
+                              <label htmlFor={`q-${l.id}`} className="sr-only">
+                                {l.itemName} miktarı
+                              </label>
+                              <input
+                                id={`q-${l.id}`}
+                                name="quantity"
+                                inputMode="decimal"
+                                defaultValue={formatQuantity(l.quantity).replace(",", ".")}
+                                className="input w-24"
+                              />
+                            </ActionForm>
+                          ) : (
+                            <span className="tabular-nums">
+                              {formatQuantity(l.quantity)} {UNIT_LABELS[l.unit]}
+                            </span>
+                          )}
+                        </td>
+                        {draft ? (
+                          <td className="tabular-nums">
+                            <span
+                              className={`badge ${Number(l.available) < Number(l.quantity) ? "badge-red" : "badge-gray"}`}
+                            >
+                              {formatQuantity(l.available)}
+                            </span>
+                          </td>
+                        ) : null}
                         {canEdit ? (
-                          <ActionForm
-                            action={addUsageItemAction}
-                            submitLabel="Güncelle"
-                            className="flex flex-wrap items-center gap-2"
-                          >
-                            <input type="hidden" name="usageId" value={u.id} />
-                            <input type="hidden" name="inventoryItemId" value={l.inventoryItemId} />
-                            <input type="hidden" name="locationId" value={l.locationId} />
-                            <label htmlFor={`q-${l.id}`} className="sr-only">
-                              {l.itemName} miktarı
-                            </label>
-                            <input
-                              id={`q-${l.id}`}
-                              name="quantity"
-                              inputMode="decimal"
-                              defaultValue={formatQuantity(l.quantity).replace(",", ".")}
-                              className="input w-24"
+                          <td className="text-right">
+                            <InlineAction
+                              action={removeUsageItemAction}
+                              fields={{ usageId: u.id, rowId: l.id }}
+                              label="Kaldır"
+                              variant="danger"
                             />
-                          </ActionForm>
-                        ) : (
-                          <span className="tabular-nums">
-                            {formatQuantity(l.quantity)} {UNIT_LABELS[l.unit]}
-                          </span>
-                        )}
-                      </td>
-                      {draft ? (
-                        <td className="tabular-nums">
-                          <span
-                            className={`badge ${Number(l.available) < Number(l.quantity) ? "badge-red" : "badge-gray"}`}
-                          >
-                            {formatQuantity(l.available)}
-                          </span>
-                        </td>
+                          </td>
+                        ) : null}
+                      </tr>
+                      {l.trackLots && canLots ? (
+                        <tr>
+                          <td colSpan={cols} className="bg-slate-50 text-sm dark:bg-slate-900/40">
+                            {l.allocations.length ? (
+                              <p>
+                                <span className="text-slate-500">
+                                  {draft ? "Elle seçilen lot:" : "Kullanılan lot:"}
+                                </span>{" "}
+                                <span className="font-mono text-xs" data-testid="usage-lots">
+                                  {lotText(l.allocations)}
+                                </span>
+                              </p>
+                            ) : draft ? (
+                              l.shortfall ? (
+                                <p role="alert" className="text-red-700 dark:text-red-400">
+                                  Kullanılabilir (SKT&apos;si geçmemiş, geri çağrılmamış) lot stoğu yetersiz.
+                                </p>
+                              ) : (
+                                <p>
+                                  <span className="text-slate-500">Önerilen lot (FEFO):</span>{" "}
+                                  <span className="font-mono text-xs" data-testid="usage-lots-suggested">
+                                    {lotText(l.suggested)}
+                                  </span>
+                                  <span className="hint block">
+                                    Kesinleştirmede sunucu yeniden kontrol eder.
+                                  </span>
+                                </p>
+                              )
+                            ) : null}
+                            {canEdit && l.lotOptions.length ? (
+                              <details className="mt-2">
+                                <summary className="cursor-pointer text-sm font-medium text-brand-700">
+                                  Lotu elle seç
+                                </summary>
+                                <ActionForm
+                                  action={setUsageLotsAction}
+                                  submitLabel="Lot seçimini kaydet"
+                                  className="mt-2 grid gap-2 sm:grid-cols-2"
+                                >
+                                  <input type="hidden" name="usageId" value={u.id} />
+                                  <input type="hidden" name="rowId" value={l.id} />
+                                  {l.lotOptions.map((o) => (
+                                    <Field
+                                      key={o.stockLotId}
+                                      label={`${o.lotNumber}${o.expiryDate ? ` · SKT ${formatExpiry(o.expiryDate)}` : ""} (mevcut ${formatQuantity(o.available)})`}
+                                      name={`lot_${o.stockLotId}`}
+                                      inputMode="decimal"
+                                      idPrefix={`lot-${l.id}`}
+                                    />
+                                  ))}
+                                  <p className="hint sm:col-span-2">
+                                    Toplam kalem miktarına ({formatQuantity(l.quantity)}) eşit olmalı. Süresi
+                                    geçmiş / geri çağrılmış lotlar listelenmez.
+                                  </p>
+                                </ActionForm>
+                                {l.allocations.length ? (
+                                  <div className="mt-2">
+                                    <InlineAction
+                                      action={setUsageLotsAction}
+                                      fields={{ usageId: u.id, rowId: l.id, mode: "auto" }}
+                                      label="Otomatik FEFO'ya dön"
+                                    />
+                                  </div>
+                                ) : null}
+                              </details>
+                            ) : null}
+                          </td>
+                        </tr>
                       ) : null}
-                      {canEdit ? (
-                        <td className="text-right">
-                          <InlineAction
-                            action={removeUsageItemAction}
-                            fields={{ usageId: u.id, rowId: l.id }}
-                            label="Kaldır"
-                            variant="danger"
-                          />
-                        </td>
-                      ) : null}
-                    </tr>
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
