@@ -31,6 +31,9 @@ const RLS_TABLES = [
   "doctor_room_assignments",
   "doctor_schedule_exceptions",
   "doctor_working_hours",
+  // Sprint 2
+  "consent_revocations",
+  "patient_branches",
 ];
 const TENANT_TABLES = RLS_TABLES.filter((t) => t !== "roles" && t !== "document_templates");
 
@@ -129,6 +132,9 @@ describe("Uygulama rolü (runtime) en az yetkili", () => {
       ["rıza seçimi güncelleme", "update kliniva.consent_choices set value = 'GRANTED'"],
       ["rıza seçimi silme", "delete from kliniva.consent_choices"],
       ["hasta silme", "delete from kliniva.patients"],
+      ["hasta-şube bağı silme", "delete from kliniva.patient_branches"],
+      ["rıza geri çekme kaydı güncelleme", "update kliniva.consent_revocations set reason = 'x'"],
+      ["rıza geri çekme kaydı silme", "delete from kliniva.consent_revocations"],
       ["truncate", "truncate kliniva.patients"],
       ["migration geçmişi okuma", "select * from kliniva.__drizzle_migrations"],
       ["şemada tablo oluşturma", "create table kliniva.x_denied (id int)"],

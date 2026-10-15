@@ -12,7 +12,7 @@ import { safeError } from "./lib/db-introspect";
 loadEnvConfig(process.cwd(), false, { info: () => {}, error: () => {} });
 
 async function main() {
-  const { and, eq, isNull } = await import("drizzle-orm");
+  const { and, desc, eq, isNull } = await import("drizzle-orm");
   // Seed migration (şema sahibi) bağlantısıyla çalışır: uygulama rolünün tenants/roles/permissions yazma yetkisi yoktur.
   const { getMigrationDb, closeMigrationDb } = await import("@/server/db/migration-client");
   const schema = await import("@/server/db/schema");
@@ -88,15 +88,17 @@ async function main() {
       console.log("✓ Klinik sahibi kullanıcı oluşturuldu (parola .env.local'da)");
     } else console.log("• Klinik sahibi zaten var");
 
+    const DRAFT_NOTE = "[Bu metin şablondur; klinik hukuk danışmanınızca onaylanmalıdır.]";
     const templates = [
       {
         type: "KVKK_DISCLOSURE" as const,
         name: "Hasta Aydınlatma Metni",
         content:
-          "6698 sayılı Kişisel Verilerin Korunması Kanunu uyarınca, veri sorumlusu sıfatıyla kliniğimiz; kimlik, iletişim ve sağlık verilerinizi teşhis, tedavi ve sağlık hizmetlerinin yürütülmesi amaçlarıyla, Kanun'un 6. maddesinde belirtilen hukuki sebeplere dayanarak işlemektedir. [Bu metin şablondur; klinik hukuk danışmanınızca onaylanmalıdır.]",
+          "6698 sayılı Kişisel Verilerin Korunması Kanunu uyarınca, veri sorumlusu sıfatıyla kliniğimiz; kimlik, iletişim ve sağlık verilerinizi teşhis, tedavi ve sağlık hizmetlerinin yürütülmesi amaçlarıyla, Kanun'un 6. maddesinde belirtilen hukuki sebeplere dayanarak işlemektedir. " +
+          DRAFT_NOTE,
         choices: [
           {
-            key: "read_and_informed",
+            key: "READ_AND_INFORMED",
             label: "Aydınlatma metnini okudum ve bilgilendirildim.",
             kind: "ACKNOWLEDGEMENT" as const,
             required: true,
@@ -107,36 +109,56 @@ async function main() {
         type: "EXPLICIT_CONSENT" as const,
         name: "Açık Rıza Beyanı",
         content:
-          "Aşağıdaki işlemler için açık rızanızı, özgür iradenizle ve her biri için ayrı ayrı verebilir veya vermeyebilirsiniz. Rıza vermemeniz sağlık hizmeti almanıza engel değildir. [Bu metin şablondur; klinik hukuk danışmanınızca onaylanmalıdır.]",
+          "Aşağıdaki iletişim kanalları için açık rızanızı, özgür iradenizle ve her biri için ayrı ayrı verebilir veya vermeyebilirsiniz. Rıza vermemeniz sağlık hizmeti almanıza engel değildir. Verdiğiniz rızayı dilediğiniz zaman geri çekebilirsiniz. " +
+          DRAFT_NOTE,
         choices: [
           {
-            key: "sms_reminders",
-            label: "Randevu hatırlatmaları için SMS gönderilmesi",
+            key: "MARKETING_SMS",
+            label: "SMS ile kampanya ve bilgilendirme",
             kind: "CONSENT" as const,
             required: true,
           },
           {
-            key: "marketing",
-            label: "Kampanya ve bilgilendirme iletileri gönderilmesi",
+            key: "MARKETING_EMAIL",
+            label: "E-posta ile kampanya ve bilgilendirme",
             kind: "CONSENT" as const,
             required: true,
           },
+          { key: "MARKETING_PHONE", label: "Telefon ile arama", kind: "CONSENT" as const, required: true },
+          { key: "MARKETING_WHATSAPP", label: "WhatsApp mesajı", kind: "CONSENT" as const, required: true },
         ],
       },
     ];
+    // Yayımlanmış sürüm DEĞİŞTİRİLMEZ. Güncel sürümün seçim anahtarları beklenenden farklıysa (ör. Sprint 0 küçük harf
+    // anahtarları) yeni sürüm eklenip yayımlanır; eşleşiyorsa hiçbir şey yapılmaz (idempotent).
+    const keysOf = (choices: { key: string }[]) => choices.map((c) => c.key).join(",");
     for (const t of templates) {
-      const [exists] = await tx
-        .select({ id: schema.documentTemplates.id })
+      const rows = await tx
+        .select({
+          id: schema.documentTemplates.id,
+          version: schema.documentTemplates.version,
+          active: schema.documentTemplates.active,
+          publishedAt: schema.documentTemplates.publishedAt,
+          choices: schema.documentTemplates.choices,
+        })
         .from(schema.documentTemplates)
         .where(
           and(eq(schema.documentTemplates.tenantId, tenantId), eq(schema.documentTemplates.type, t.type)),
+        )
+        .orderBy(desc(schema.documentTemplates.version));
+      const live = rows.find((r) => r.active && r.publishedAt);
+      if (live && keysOf(live.choices) === keysOf(t.choices)) continue;
+      const version = (rows[0]?.version ?? 0) + 1;
+      await tx
+        .update(schema.documentTemplates)
+        .set({ active: false })
+        .where(
+          and(eq(schema.documentTemplates.tenantId, tenantId), eq(schema.documentTemplates.type, t.type)),
         );
-      if (!exists) {
-        await tx
-          .insert(schema.documentTemplates)
-          .values({ ...t, tenantId, version: 1, publishedAt: new Date() });
-        console.log(`✓ Şablon yayımlandı: ${t.type} v1`);
-      }
+      await tx
+        .insert(schema.documentTemplates)
+        .values({ ...t, tenantId, version, active: true, publishedAt: new Date() });
+      console.log(`✓ Şablon yayımlandı: ${t.type} v${version}`);
     }
   });
 

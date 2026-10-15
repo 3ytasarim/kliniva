@@ -1,5 +1,4 @@
 import "server-only";
-import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { clinicProfiles, tenants } from "@/server/db/schema";
@@ -7,7 +6,7 @@ import { AppError } from "@/server/errors";
 import { writeAudit } from "@/server/audit/audit";
 import { actorOf, requirePermission, type AuthContext } from "@/server/auth/authz";
 import { tenantQuery, tenantWhere, type TenantScope } from "@/server/tenant/tenant-query";
-import { getPrivateStorage } from "@/server/storage/private-storage";
+import { getPrivateStorage, keyBelongsToTenant, newStorageKey } from "@/server/storage/private-storage";
 import { InvalidLogoError, processLogo } from "@/server/media/logo";
 import { isValidTimeZone } from "@/lib/time";
 import { parseInput } from "@/server/services/parse";
@@ -151,9 +150,9 @@ export async function uploadClinicLogo(ctx: AuthContext, file: Buffer): Promise<
     }
     throw e;
   }
-  await tenantQuery(ctx, async (scope) => {
-    // Orijinal dosya adı hiçbir yere taşınmaz; anahtar: <tenantId>/logos/<uuid>.png
-    const key = `${scope.tenantId}/logos/${randomUUID()}.png`;
+  const replaced = await tenantQuery(ctx, async (scope) => {
+    // Orijinal dosya adı hiçbir yere taşınmaz; anahtar: tenant/<tenantId>/logos/<uuid>.bin
+    const key = newStorageKey(scope.tenantId, "logos");
     await getPrivateStorage().put(key, processed.png);
     const existing = await loadProfile(scope);
     if (existing) {
@@ -175,7 +174,14 @@ export async function uploadClinicLogo(ctx: AuthContext, file: Buffer): Promise<
       entityType: "clinic_profile",
       metadata: { sourceFormat: processed.sourceFormat, width: processed.width, height: processed.height },
     });
+    return existing?.logoStorageKey ?? null;
   });
+  // Eski logo (transaction commit edildikten sonra) silinir; silme politikası yalnızca logolara izin verir.
+  if (replaced && keyBelongsToTenant(replaced, ctx.tenantId)) {
+    await getPrivateStorage()
+      .deleteIfAllowed(replaced)
+      .catch(() => false);
+  }
 }
 
 /** Oturumdaki kiracının logosu (PNG). Logo yoksa NOT_FOUND. */
@@ -183,7 +189,7 @@ export async function readClinicLogo(ctx: AuthContext): Promise<Buffer> {
   requirePermission(ctx, "clinic.read");
   const key = await tenantQuery(ctx, async (scope) => (await loadProfile(scope))?.logoStorageKey ?? null);
   // Savunma derinliği: anahtar kiracı önekini taşımak zorunda.
-  if (!key || !key.startsWith(`${ctx.tenantId}/logos/`)) throw new AppError("NOT_FOUND");
+  if (!key || !keyBelongsToTenant(key, ctx.tenantId)) throw new AppError("NOT_FOUND");
   const data = await getPrivateStorage().get(key);
   if (!data) throw new AppError("NOT_FOUND");
   return data;
@@ -198,7 +204,7 @@ export async function clinicBrandingForScope(scope: TenantScope): Promise<{
   const row = await loadProfile(scope);
   if (!row) return { displayName: null, legalName: null, logoPng: null };
   let logoPng: Buffer | null = null;
-  if (row.logoStorageKey && row.logoStorageKey.startsWith(`${scope.tenantId}/logos/`)) {
+  if (row.logoStorageKey && keyBelongsToTenant(row.logoStorageKey, scope.tenantId)) {
     logoPng = await getPrivateStorage().get(row.logoStorageKey);
   }
   return { displayName: row.displayName, legalName: row.legalName, logoPng };

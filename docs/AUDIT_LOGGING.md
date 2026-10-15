@@ -18,18 +18,21 @@
 
 ## Eylemler
 
-| Eylem                                                               | Ne zaman                              |
-| ------------------------------------------------------------------- | ------------------------------------- |
-| `LOGIN_SUCCESS` / `LOGIN_FAILED` (`reason`) / `LOGOUT`              | Kimlik doğrulama                      |
-| `MFA_ENROLLMENT_STARTED` / `MFA_ENABLED` / `MFA_FAILED`             | MFA                                   |
-| `SESSION_REVOKED_ALL`                                               | Diğer oturumları kapatma              |
-| `PATIENT_CREATED` (`hasHealthNotes`)                                | Hasta oluşturma                       |
-| `PATIENT_VIEWED` / `PATIENT_HEALTH_VIEWED`                          | Hasta detayı (sağlık verisi dahil mi) |
-| `PATIENT_UPDATED` (`fields`, `healthNotesChanged`)                  | Güncelleme — yalnızca alan adları     |
-| `PATIENT_DOCUMENT_GENERATED` / `_PRESENTED` / `_SIGNED` / `_VIEWED` | KVKK belgeleri                        |
-| `DOCUMENT_TEMPLATE_VERSION_CREATED` / `DOCUMENT_TEMPLATE_PUBLISHED` | Şablon versiyonları                   |
-| `USER_CREATED` / `PERMISSION_CHANGED` (`roles`, `active`)           | Kullanıcı / yetki                     |
-| `BRANCH_CREATED` / `BRANCH_UPDATED` / `ROOM_CREATED`                | Organizasyon                          |
+| Eylem                                                                                         | Ne zaman                                                 |
+| --------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `LOGIN_SUCCESS` / `LOGIN_FAILED` (`reason`) / `LOGOUT`                                        | Kimlik doğrulama                                         |
+| `MFA_ENROLLMENT_STARTED` / `MFA_ENABLED` / `MFA_FAILED`                                       | MFA                                                      |
+| `SESSION_REVOKED_ALL`                                                                         | Diğer oturumları kapatma                                 |
+| `PATIENT_CREATED` (`hasHealthNotes`)                                                          | Hasta oluşturma                                          |
+| `PATIENT_VIEWED` / `PATIENT_HEALTH_VIEWED`                                                    | Hasta detayı (sağlık verisi dahil mi)                    |
+| `PATIENT_UPDATED` (`fields`, `healthNotesChanged`, `nationalIdChanged`)                       | Güncelleme — yalnızca alan adları                        |
+| `PATIENT_DUPLICATE_WARNING` (`matchCount`)                                                    | Olası mükerrer kayıt uyarısı                             |
+| `PATIENT_DOCUMENT_CREATED` / `_PRESENTED` / `_SIGNED` / `_VIEWED` / `_DOWNLOADED` / `_VOIDED` | KVKK belgeleri                                           |
+| `PATIENT_DOCUMENT_INTEGRITY_FAILED` (`part`)                                                  | PDF / snapshot / imza bütünlük ihlali (ayrı transaction) |
+| `CONSENT_GRANTED` / `CONSENT_DENIED` / `CONSENT_REVOKED` (`consentKey`, `channel`)            | Açık rıza kararları — serbest metin gerekçe yazılmaz     |
+| `DOCUMENT_TEMPLATE_VERSION_CREATED` / `DOCUMENT_TEMPLATE_PUBLISHED`                           | Şablon versiyonları                                      |
+| `USER_CREATED` / `PERMISSION_CHANGED` (`roles`, `active`)                                     | Kullanıcı / yetki                                        |
+| `BRANCH_CREATED` / `BRANCH_UPDATED` / `ROOM_CREATED`                                          | Organizasyon                                             |
 
 ## Kurallar
 
@@ -47,7 +50,7 @@
 
 ## Okuma
 
-`audit.read` yetkisi (CLINIC_OWNER, CLINIC_ADMIN). Audit görüntüleme ekranı Sprint 1 kapsamındadır.
+`audit.read` yetkisi (CLINIC_OWNER, CLINIC_ADMIN). Hasta dosyasındaki **Aktivite** sekmesi yalnızca eylem kodu, zaman ve işlemi yapan personelin adını gösterir.
 
 ## Uygulama log'ları (audit'ten ayrı)
 

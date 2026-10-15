@@ -15,13 +15,13 @@ import { AppError } from "@/server/errors";
 import { makePng, pngDataUrl } from "../support/png";
 
 describe("Statik imza PNG temizleme", () => {
-  it("meta veri parçaları (tEXt/iTXt/eXIf) atılır, görüntü korunur", () => {
+  it("meta veri parçaları (tEXt/iTXt/eXIf) atılır, görüntü korunur", async () => {
     const evil = makePng(300, 100, [
       { type: "tEXt", data: Buffer.from("pressure\u0000[0.2,0.5,0.9] timings [12,15,40]") },
       { type: "iTXt", data: Buffer.from("biometric\u0000\u0000\u0000\u0000\u0000vector") },
       { type: "eXIf", data: Buffer.from("exif") },
     ]);
-    const { png, width, height } = sanitizeSignaturePng(evil);
+    const { png, width, height } = await sanitizeSignaturePng(evil);
     expect(width).toBe(300);
     expect(height).toBe(100);
     const s = png.toString("latin1");
@@ -33,13 +33,13 @@ describe("Statik imza PNG temizleme", () => {
     expect(s).toContain("IDAT");
   });
 
-  it("PNG olmayan veri reddedilir", () => {
-    expect(() => sanitizeSignaturePng(Buffer.from("GIF89a....."))).toThrow(InvalidSignatureError);
+  it("PNG olmayan veri reddedilir", async () => {
+    await expect(sanitizeSignaturePng(Buffer.from("GIF89a....."))).rejects.toThrow(InvalidSignatureError);
   });
 
-  it("aşırı boyutlar reddedilir", () => {
-    expect(() => sanitizeSignaturePng(makePng(5000, 100))).toThrow(InvalidSignatureError);
-    expect(() => sanitizeSignaturePng(makePng(10, 10))).toThrow(InvalidSignatureError);
+  it("aşırı boyutlar reddedilir", async () => {
+    await expect(sanitizeSignaturePng(makePng(5000, 100))).rejects.toThrow(InvalidSignatureError);
+    await expect(sanitizeSignaturePng(makePng(10, 10))).rejects.toThrow(InvalidSignatureError);
   });
 
   it("yalnızca data:image/png kabul edilir", () => {

@@ -28,6 +28,12 @@ const MAIN: NavItem[] = [
 
 const SETTINGS: NavItem[] = [
   { href: "/settings/clinic", label: "Klinik", icon: "settings", perm: "clinic.manage" },
+  {
+    href: "/settings/documents",
+    label: "Belge şablonları",
+    icon: "reports",
+    perm: "document.template.manage",
+  },
   { href: "/admin/users", label: "Kullanıcılar", icon: "users", perm: "user.read" },
 ];
 
@@ -37,7 +43,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const visible = (items: NavItem[]) => items.filter((n) => "soon" in n || hasPermission(ctx, n.perm));
 
   return (
-    <div className="min-h-dvh md:grid md:grid-cols-[260px_1fr]">
+    <div className="min-h-dvh md:grid md:grid-cols-[260px_minmax(0,1fr)]">
       <header className="border-b border-slate-200 bg-white md:sticky md:top-0 md:flex md:h-dvh md:flex-col md:border-b-0 md:border-r dark:border-slate-800 dark:bg-slate-900">
         <div className="flex items-center gap-3 p-4">
           {profile.hasLogo ? (

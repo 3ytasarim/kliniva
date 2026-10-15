@@ -149,7 +149,7 @@ describe("KVKK belge akışı", () => {
 });
 
 describe("İmzalanmış PatientDocument overwrite edilemez", () => {
-  it("ikinci imza denemesi → CONFLICT", async () => {
+  it("ikinci imza denemesi → DOCUMENT_ALREADY_SIGNED", async () => {
     expect(
       await code(
         signPatientDocument(T.users.owner!.ctx, signedDocId, {
@@ -158,7 +158,7 @@ describe("İmzalanmış PatientDocument overwrite edilemez", () => {
           choices: { read_and_informed: "READ_AND_INFORMED" },
         }),
       ),
-    ).toBe("CONFLICT");
+    ).toBe("DOCUMENT_ALREADY_SIGNED");
   });
 
   it("uygulama rolü (kliniva_app): UPDATE tetikleyiciyle, DELETE ve seçim değişikliği yetkiyle reddedilir", async () => {

@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, notInArray, sql } from "drizzle-orm";
 import type { Db } from "@/server/db/client";
 import { permissions, rolePermissions, roles } from "@/server/db/schema";
 import { PERMISSIONS, ROLE_KEYS, SYSTEM_ROLES } from "@/server/auth/permissions";
@@ -22,6 +22,9 @@ export async function syncRbacCatalog(db: Db): Promise<void> {
         set: { description },
       });
     }
+    // Katalogdan kaldırılan yetkiler (ör. Sprint 2'de document.* → patient.document.*) silinir;
+    // role_permissions FK CASCADE ile temizlenir → hiçbir rol eski yetkiyi taşımaya devam etmez.
+    await tx.delete(permissions).where(notInArray(permissions.key, Object.keys(PERMISSIONS)));
     const permRows = await tx.select({ id: permissions.id, key: permissions.key }).from(permissions);
     const permId = new Map(permRows.map((p) => [p.key, p.id]));
 

@@ -7,7 +7,7 @@ import { assertSameOrigin } from "@/server/security/origin";
  * Route handler sarmalayıcı: origin (CSRF) kontrolü + tutarlı hata biçimi + güvenli loglama.
  * Beklenmeyen hatalar istemciye ayrıntısız 500 döner; log'a yalnızca temizlenmiş ad/kod yazılır.
  */
-export const NO_STORE = { "Cache-Control": "no-store, private", "X-Content-Type-Options": "nosniff" };
+export const NO_STORE = { "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" };
 
 export function json(body: unknown, status = 200): Response {
   return Response.json(body, { status, headers: NO_STORE });

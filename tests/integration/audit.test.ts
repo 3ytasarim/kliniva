@@ -50,8 +50,9 @@ beforeAll(async () => {
     doctor: { role: "DOCTOR" },
     reception: { role: "RECEPTION" },
   });
+  // Sprint 2: DOCTOR hasta OLUŞTURAMAZ (patient.create yok) → kaydı klinik sahibi açar; doktor okur / not günceller.
   patientId = (
-    await createPatient(T.users.doctor!.ctx, {
+    await createPatient(T.users.owner!.ctx, {
       firstName: NAME,
       lastName: SURNAME,
       phone: PHONE,
@@ -84,8 +85,9 @@ beforeAll(async () => {
     choices: [{ key: "read_and_informed", label: "Okudum", kind: "ACKNOWLEDGEMENT", required: true }],
   });
   await publishTemplate(T.users.owner!.ctx, tpl.id);
-  const doc = await generatePatientDocument(T.users.doctor!.ctx, { patientId, templateId: tpl.id });
-  await signPatientDocument(T.users.doctor!.ctx, doc.id, {
+  // Belge akışı resepsiyonda (create/present/sign); doktor yalnızca okur.
+  const doc = await generatePatientDocument(T.users.reception!.ctx, { patientId, templateId: tpl.id });
+  await signPatientDocument(T.users.reception!.ctx, doc.id, {
     signedByName: `${NAME} ${SURNAME}`,
     signaturePng: SIGNATURE,
     choices: { read_and_informed: "READ_AND_INFORMED" },
@@ -175,13 +177,17 @@ describe("Audit log", () => {
   it("güncelleme kaydı yalnızca alan ADLARINI ve sağlık bayrağını içerir", async () => {
     const upd = (await tenantAudit()).find((r) => r.action === "PATIENT_UPDATED");
     // Not alanı "fields" içinde değil, ayrı bayrakla işaretlenir.
-    expect(upd?.metadataSafe).toEqual({ fields: "phone", healthNotesChanged: true });
+    expect(upd?.metadataSafe).toEqual({
+      fields: "phone",
+      healthNotesChanged: true,
+      nationalIdChanged: false,
+    });
   });
 
   it("kaynak (source) ve kullanıcı kaydedilir; IP düz metin değil özet", async () => {
     const created = (await tenantAudit()).find((r) => r.action === "PATIENT_CREATED");
     expect(created?.source).toBe("USER");
-    expect(created?.userId).toBe(T.users.doctor!.id);
+    expect(created?.userId).toBe(T.users.owner!.id);
     expect(created?.ipHash ?? "").not.toMatch(/^\d+\.\d+\.\d+\.\d+$/);
   });
 

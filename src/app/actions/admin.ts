@@ -4,7 +4,6 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/server/auth/guards";
 import { formToObject, runAction, type ActionState } from "@/server/action-result";
 import { createUser } from "@/server/services/users";
-import { createPatient } from "@/server/services/patients";
 import { confirmMfaEnrollment, revokeOtherSessions, startMfaEnrollment } from "@/server/services/mfa";
 
 /** Tüm server action'lar: requireUser() (oturum) → servis (yetki + Zod + audit). */
@@ -22,14 +21,6 @@ export async function createUserAction(_p: ActionState, form: FormData): Promise
     });
     revalidatePath("/admin/users");
     return "Kullanıcı oluşturuldu.";
-  });
-}
-
-export async function createPatientAction(_p: ActionState, form: FormData): Promise<ActionState> {
-  return runAction(async () => {
-    const { patientNumber } = await createPatient(await requireUser(), formToObject(form));
-    revalidatePath("/patients");
-    return `Hasta oluşturuldu (${patientNumber}).`;
   });
 }
 

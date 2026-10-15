@@ -20,6 +20,7 @@ export async function GET(req: Request, { params }: Params) {
         ...NO_STORE,
         "Content-Type": file.contentType,
         "Content-Disposition": `inline; filename="kliniva-${kind}.${kind === "pdf" ? "pdf" : "png"}"`,
+        ...(kind === "signature" ? { "Content-Security-Policy": "default-src 'none'; sandbox" } : {}),
         "X-Integrity-Verified": String(file.sha256Ok),
       },
     });

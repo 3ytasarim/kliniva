@@ -32,6 +32,7 @@ import {
   unique,
   uuid,
 } from "drizzle-orm/pg-core";
+import type { TemplateChoice } from "@/types/patients";
 
 export const kliniva = pgSchema("kliniva");
 
@@ -52,13 +53,16 @@ export const documentType = kliniva.enum("document_type", [
   "EXPLICIT_CONSENT",
   "TREATMENT_CONSENT",
   "OTHER",
+  "COMMERCIAL_COMMUNICATION_CONSENT",
 ]);
+/** DRAFT (içerik snapshot'ı sabit) → PRESENTED → SIGNED; VOIDED = geçersiz kılma kaydı (fiziksel silme değil). */
 export const patientDocumentStatus = kliniva.enum("patient_document_status", [
-  "GENERATED",
+  "DRAFT",
   "PRESENTED",
   "SIGNED",
   "VOIDED",
 ]);
+export const signerType = kliniva.enum("signer_type", ["PATIENT", "PARENT", "LEGAL_GUARDIAN"]);
 /** Aydınlatma (READ_AND_INFORMED) ile açık rıza (GRANTED/DENIED) ayrı değerlerdir; birbirine dönüştürülmez. */
 export const consentValue = kliniva.enum("consent_value", ["READ_AND_INFORMED", "GRANTED", "DENIED"]);
 export const roomType = kliniva.enum("room_type", [
@@ -291,14 +295,28 @@ export const patients = kliniva.table(
     tenantId: uuid("tenant_id")
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
-    branchId: uuid("branch_id"),
+    /** Ana şube (DB sütunu tarihsel olarak branch_id). Yetki için tek başına kullanılmaz → patient_branches. */
+    primaryBranchId: uuid("branch_id"),
     patientNumber: text("patient_number").notNull(),
     firstName: text("first_name").notNull(),
     lastName: text("last_name").notNull(),
     phone: text("phone").notNull(),
+    /** Ülke farkındalıklı E.164 (ör. +905321234567) — arama ve olası kopya tespiti için. */
+    phoneNormalized: text("phone_normalized"),
+    secondaryPhone: text("secondary_phone"),
     email: text("email"),
+    emailNormalized: text("email_normalized"),
     birthDate: date("birth_date"),
     gender: text("gender"),
+    nationality: text("nationality"),
+    preferredLanguage: text("preferred_language").notNull().default("TR"),
+    address: text("address"),
+    city: text("city"),
+    district: text("district"),
+    emergencyContactName: text("emergency_contact_name"),
+    emergencyContactPhone: text("emergency_contact_phone"),
+    /** [SENSITIVE_PERSONAL] TC kimlik no — yalnızca şifreli; düz metin asla yazılmaz. */
+    nationalIdEncrypted: text("national_id_encrypted"),
     notesEncrypted: text("notes_encrypted"),
     active: boolean("active").notNull().default(true),
     createdByUserId: uuid("created_by_user_id"),
@@ -308,12 +326,14 @@ export const patients = kliniva.table(
   (t) => [
     foreignKey({
       name: "patients_branch_fk",
-      columns: [t.tenantId, t.branchId],
+      columns: [t.tenantId, t.primaryBranchId],
       foreignColumns: [branches.tenantId, branches.id],
     }).onDelete("no action"),
     unique("patients_tenant_id_uq").on(t.tenantId, t.id),
     unique("patients_tenant_number_uq").on(t.tenantId, t.patientNumber),
-    index("patients_tenant_branch_idx").on(t.tenantId, t.branchId),
+    index("patients_tenant_branch_idx").on(t.tenantId, t.primaryBranchId),
+    index("patients_tenant_phone_idx").on(t.tenantId, t.phoneNormalized),
+    index("patients_tenant_email_idx").on(t.tenantId, t.emailNormalized),
   ],
 );
 
@@ -348,13 +368,7 @@ export const auditLogs = kliniva.table(
   ],
 );
 
-/** Şablondaki seçim tanımı: ACKNOWLEDGEMENT → yalnızca READ_AND_INFORMED; CONSENT → GRANTED / DENIED. */
-export type TemplateChoice = {
-  key: string;
-  label: string;
-  kind: "ACKNOWLEDGEMENT" | "CONSENT";
-  required: boolean;
-};
+export type { TemplateChoice };
 
 /**
  * [INTERNAL] Belge şablonu. Her satır bir VERSİYONDUR. Yayımlanan (published_at dolu) şablonun metni/seçimleri
@@ -397,15 +411,30 @@ export const patientDocuments = kliniva.table(
       .notNull()
       .references(() => documentTemplates.id, { onDelete: "no action" }),
     documentVersion: integer("document_version").notNull(),
-    status: patientDocumentStatus("status").notNull().default("GENERATED"),
+    status: patientDocumentStatus("status").notNull().default("DRAFT"),
     generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
     presentedAt: timestamp("presented_at", { withTimezone: true }),
     signedAt: timestamp("signed_at", { withTimezone: true }),
+    /** İmzalayan kişinin adı (hasta veya yasal temsilci). */
     signedByName: text("signed_by_name"),
+    signerType: signerType("signer_type"),
     guardianName: text("guardian_name"),
+    guardianRelationship: text("guardian_relationship"),
     signatureStorageKey: text("signature_storage_key"),
     pdfStorageKey: text("pdf_storage_key"),
+    /** Final PDF baytlarının SHA-256'sı. */
     documentSha256: text("document_sha256"),
+    /**
+     * [HEALTH_SPECIAL_CATEGORY] Hastaya gösterilen belgenin TAM içerik snapshot'ı (başlık, metin, seçim şeması) —
+     * AES-256-GCM şifreli; DRAFT oluşturulurken yazılır ve bir daha değişmez. Şablon değişse/silinse bile hastanın
+     * gerçekte gördüğü ve imzaladığı metin kanıtlanabilir.
+     */
+    contentSnapshotEncrypted: text("content_snapshot_encrypted"),
+    /** Snapshot'ın kanonik JSON SHA-256'sı (önizleme == imza doğrulaması). */
+    contentSha256: text("content_sha256"),
+    voidedAt: timestamp("voided_at", { withTimezone: true }),
+    voidedByUserId: uuid("voided_by_user_id"),
+    voidReason: text("void_reason"),
     createdByUserId: uuid("created_by_user_id").notNull(),
     createdAt: createdAt(),
   },
@@ -443,6 +472,7 @@ export const consentChoices = kliniva.table(
       foreignColumns: [patientDocuments.tenantId, patientDocuments.id],
     }).onDelete("cascade"),
     unique("consent_choices_document_key_uq").on(t.patientDocumentId, t.key),
+    unique("consent_choices_tenant_id_uq").on(t.tenantId, t.id),
   ],
 );
 
@@ -472,11 +502,14 @@ export const clinicProfiles = kliniva.table(
     logoStorageKey: text("logo_storage_key"),
     timezone: text("timezone").notNull().default("Europe/Istanbul"),
     defaultAppointmentDurationMinutes: integer("default_appointment_duration_minutes").notNull().default(30),
+    /** Okunabilir hasta numarası öneki (KLI-000001). */
+    patientNumberPrefix: text("patient_number_prefix").notNull().default("KLI"),
     active: boolean("active").notNull().default(true),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [
+    check("clinic_profiles_prefix_ck", sql`${t.patientNumberPrefix} ~ '^[A-Z0-9]{2,8}$'`),
     check("clinic_profiles_duration_ck", sql`${t.defaultAppointmentDurationMinutes} between 5 and 480`),
   ],
 );
@@ -691,5 +724,76 @@ export const branchClosures = kliniva.table(
       sql`(${t.allDay} and ${t.startTime} is null and ${t.endTime} is null) or ((not ${t.allDay}) and ${t.startTime} is not null and ${t.endTime} is not null and ${t.startTime} < ${t.endTime})`,
     ),
     index("branch_closures_branch_date_idx").on(t.tenantId, t.branchId, t.date),
+  ],
+);
+
+// ================================================================ Sprint 2 — hasta CRM + KVKK
+
+/**
+ * Hasta ↔ şube geçmişi. Şube kapsamlı kullanıcı yalnızca yetkili olduğu şubeyle İLİŞKİLİ hastaları görür
+ * (yalnızca primaryBranchId'ye bakılmaz). Kiracı + hasta + şube benzersiz.
+ */
+export const patientBranches = kliniva.table(
+  "patient_branches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    patientId: uuid("patient_id").notNull(),
+    branchId: uuid("branch_id").notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: "patient_branches_patient_fk",
+      columns: [t.tenantId, t.patientId],
+      foreignColumns: [patients.tenantId, patients.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "patient_branches_branch_fk",
+      columns: [t.tenantId, t.branchId],
+      foreignColumns: [branches.tenantId, branches.id],
+    }).onDelete("cascade"),
+    unique("patient_branches_uq").on(t.tenantId, t.patientId, t.branchId),
+    index("patient_branches_branch_idx").on(t.tenantId, t.branchId),
+  ],
+);
+
+/**
+ * Açık rızanın geri çekilmesi. Orijinal ConsentChoice (GRANTED) ve imzalı belge DEĞİŞMEZ; güncel durum
+ * (REVOKED) bu kayıttan türetilir. Yalnızca eklenir (UPDATE/DELETE yetkisi yok). Aydınlatma geri çekilemez (tetikleyici).
+ */
+export const consentRevocations = kliniva.table(
+  "consent_revocations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    patientId: uuid("patient_id").notNull(),
+    consentChoiceId: uuid("consent_choice_id").notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }).notNull().defaultNow(),
+    revokedByUserId: uuid("revoked_by_user_id"),
+    channel: text("channel").notNull(),
+    reason: text("reason"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: "consent_revocations_patient_fk",
+      columns: [t.tenantId, t.patientId],
+      foreignColumns: [patients.tenantId, patients.id],
+    }).onDelete("no action"),
+    foreignKey({
+      name: "consent_revocations_choice_fk",
+      columns: [t.tenantId, t.consentChoiceId],
+      foreignColumns: [consentChoices.tenantId, consentChoices.id],
+    }).onDelete("no action"),
+    unique("consent_revocations_choice_uq").on(t.consentChoiceId),
+    check(
+      "consent_revocations_channel_ck",
+      sql`${t.channel} in ('IN_PERSON', 'PHONE', 'EMAIL', 'WRITTEN', 'PORTAL', 'OTHER')`,
+    ),
+    index("consent_revocations_patient_idx").on(t.tenantId, t.patientId),
   ],
 );

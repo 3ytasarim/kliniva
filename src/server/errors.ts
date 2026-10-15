@@ -11,7 +11,9 @@ export type AppErrorCode =
   | "CONFLICT"
   | "BAD_ORIGIN"
   | "ROOM_SCHEDULE_CONFLICT"
-  | "DOCTOR_SCHEDULE_CONFLICT";
+  | "DOCTOR_SCHEDULE_CONFLICT"
+  | "DOCUMENT_ALREADY_SIGNED"
+  | "DOCUMENT_INTEGRITY_FAILED";
 
 const STATUS: Record<AppErrorCode, number> = {
   UNAUTHENTICATED: 401,
@@ -23,6 +25,8 @@ const STATUS: Record<AppErrorCode, number> = {
   BAD_ORIGIN: 403,
   ROOM_SCHEDULE_CONFLICT: 409,
   DOCTOR_SCHEDULE_CONFLICT: 409,
+  DOCUMENT_ALREADY_SIGNED: 409,
+  DOCUMENT_INTEGRITY_FAILED: 422,
 };
 
 const MESSAGES: Record<AppErrorCode, string> = {
@@ -35,6 +39,8 @@ const MESSAGES: Record<AppErrorCode, string> = {
   BAD_ORIGIN: "İstek kaynağı doğrulanamadı.",
   ROOM_SCHEDULE_CONFLICT: "Bu oda seçilen zaman aralığında başka bir doktora atanmış.",
   DOCTOR_SCHEDULE_CONFLICT: "Doktorun bu zaman aralığında başka bir planı var.",
+  DOCUMENT_ALREADY_SIGNED: "Bu belge zaten imzalanmış.",
+  DOCUMENT_INTEGRITY_FAILED: "Belge bütünlük doğrulamasından geçemedi; belge sunulamıyor.",
 };
 
 export class AppError extends Error {

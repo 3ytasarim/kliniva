@@ -55,7 +55,7 @@ describe("Tenant A kullanıcısı Tenant B verisini OKUYAMAZ", () => {
   });
 
   it("listPatients yalnızca kendi kiracısının hastalarını döner", async () => {
-    const list = await listPatients(A.users.owner!.ctx);
+    const list = (await listPatients(A.users.owner!.ctx)).items;
     expect(list.map((p) => p.id)).toContain(patientA);
     expect(list.map((p) => p.id)).not.toContain(patientB);
   });

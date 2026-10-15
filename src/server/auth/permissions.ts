@@ -19,8 +19,11 @@ export const PERMISSIONS = {
   "patient.delete": "Hasta kaydını pasifleştirme",
   "patient.health.read": "Hasta sağlık verisini (tıbbi not) görüntüleme",
   "patient.health.write": "Hasta sağlık verisini yazma",
-  "document.read": "Hasta belgelerini görüntüleme",
-  "document.sign": "Hasta belgesi oluşturma ve imzalatma",
+  "patient.document.read": "Hasta belgelerini (imzalı PDF dahil) görüntüleme / indirme",
+  "patient.document.create": "Hasta için belge (KVKK / rıza) oluşturma, rıza geri çekme kaydı",
+  "patient.document.present": "Belgeyi hastaya sunma (tablet önizleme)",
+  "patient.document.sign": "Belgeyi hastaya imzalatma",
+  "patient.document.void": "İmzalı belgeyi geçersiz kılma (VOID)",
   "document.template.manage": "Belge şablonu / versiyon yönetimi",
   "audit.read": "Denetim kayıtlarını görüntüleme",
   // Sprint 1 — doktorlar ve çalışma planı
@@ -50,6 +53,14 @@ export type RoleKey = (typeof ROLE_KEYS)[number];
 /** MFA'nın ileride zorunlu kılınacağı roller (bkz. docs/ARCHITECTURE.md → MFA). */
 export const MFA_REQUIRED_ROLES: readonly RoleKey[] = ["CLINIC_OWNER", "CLINIC_ADMIN", "DOCTOR"];
 
+/** Hasta belgeleri (KVKK / rıza) — oluştur, sun, imzalat, görüntüle. VOID ayrı ve yalnızca yönetim rollerinde. */
+const PATIENT_DOCUMENT_FLOW: Permission[] = [
+  "patient.document.read",
+  "patient.document.create",
+  "patient.document.present",
+  "patient.document.sign",
+];
+
 const ADMIN_BASE: Permission[] = [
   "clinic.read",
   "branch.read",
@@ -62,8 +73,8 @@ const ADMIN_BASE: Permission[] = [
   "patient.create",
   "patient.update",
   "patient.delete",
-  "document.read",
-  "document.sign",
+  ...PATIENT_DOCUMENT_FLOW,
+  "patient.document.void",
   "document.template.manage",
   "audit.read",
   "doctor.read",
@@ -76,7 +87,7 @@ const ADMIN_BASE: Permission[] = [
 
 export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permission[] }> = {
   // Platform yöneticisi kiracı verisine (hasta vb.) bu rolle ERİŞEMEZ. Platform operasyonları ayrı, denetimli
-  // araçlarla yapılacaktır (Sprint 1+). Bu nedenle kiracı yetkisi verilmez.
+  // araçlarla yapılacaktır. Bu nedenle kiracı yetkisi verilmez.
   PLATFORM_SUPER_ADMIN: { name: "Platform Süper Yönetici", permissions: [] },
   CLINIC_OWNER: {
     name: "Klinik Sahibi",
@@ -95,13 +106,13 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       "patient.read",
       "patient.create",
       "patient.update",
-      "document.read",
-      "document.sign",
+      ...PATIENT_DOCUMENT_FLOW,
       "doctor.read",
       "doctor.schedule.read",
       "doctor.schedule.manage",
     ],
   },
+  // Doktor: hasta kaydı açmaz / belge imzalatmaz (resepsiyon akışı). Tıbbi notu yazabilmesi için patient.update.
   DOCTOR: {
     name: "Doktor",
     permissions: [
@@ -109,12 +120,10 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       "branch.read",
       "room.read",
       "patient.read",
-      "patient.create",
       "patient.update",
       "patient.health.read",
       "patient.health.write",
-      "document.read",
-      "document.sign",
+      "patient.document.read",
       // Yalnızca KENDİ planını görür; plan değişikliği klinik politikasına bağlı (şimdilik yönetim rolleri).
       "doctor.self.read",
     ],
@@ -128,7 +137,7 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       "patient.read",
       "patient.update",
       "patient.health.read",
-      "document.read",
+      "patient.document.read",
       "doctor.read",
       "doctor.schedule.read",
     ],
@@ -142,8 +151,7 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       "patient.read",
       "patient.create",
       "patient.update",
-      "document.read",
-      "document.sign",
+      ...PATIENT_DOCUMENT_FLOW,
       "doctor.read",
       "doctor.schedule.read",
     ],

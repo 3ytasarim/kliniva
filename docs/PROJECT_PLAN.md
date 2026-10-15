@@ -17,14 +17,26 @@
 | Güvenlik başlıkları (nonce CSP), PII/PHI-safe logging                               | ✅    |
 | Dokümantasyon + testler                                                             | ✅    |
 
-## Sprint 1 (öneri)
+## Sprint 1 — Klinik profili ve planlama ✅
 
-- MFA zorunluluğu (CLINIC_OWNER/ADMIN/DOCTOR), kurtarma kodları
-- Audit görüntüleme ekranı, hasta detay ekranı, tablet imza ekranı (SignaturePad bileşeni hazır)
-- Özel depo üretim adaptörü (S3/R2 private), orphan nesne temizliği
-- Ayrı en az yetkili uygulama DB rolü
-- Randevu modeli (şube + oda + doktor)
+Klinik profili + logo, şubeler, odalar, doktorlar, çalışma saatleri, çakışma motoru (exclusion constraint),
+müsaitlik hesabı. Ayrıntı: `docs/SCHEDULING.md`.
 
-## Sprint 2+
+## Sprint 2 — Hasta CRM + KVKK + açık rıza + statik imza ✅
 
-Stok, Voice AI (yetki kontrollü araçlar, `source = AI_VOICE`), raporlama, KVKK m.11 hak talepleri.
+| İş                                                                                        | Durum |
+| ----------------------------------------------------------------------------------------- | ----- |
+| Hasta modeli: iletişim alanları, E.164 telefon, şifreli TC kimlik, `patient_branches`     | ✅    |
+| Eşzamanlılık güvenli hasta no (`KLI-000001`, kiracı öneki)                                | ✅    |
+| Deterministik mükerrer uyarısı (birleştirme yok)                                          | ✅    |
+| `/patients` arama + sayfalama, `/patients/new` 5 adımlı sihirbaz, hasta dosyası sekmeleri | ✅    |
+| Tablet odak imza ekranı, `/settings/documents` şablon sürümleri                           | ✅    |
+| Şifreli snapshot + TOCTOU koruması, durum makinesi tetikleyicisi, VOID                    | ✅    |
+| PDF v2 (header/footer, sayfalama, bölünmeyen imza bloğu, logo / metin başlık)             | ✅    |
+| Bütünlük doğrulama, dosya uç noktası, özel depo (local + S3/R2 SigV4)                     | ✅    |
+| Rıza durumu (GRANTED/DENIED/REVOKED/NOT_ASKED) ve geri çekme                              | ✅    |
+
+## Sprint 3+ (öneri)
+
+Randevu motoru, Voice AI (yetki kontrollü araçlar, `source = AI_VOICE`), stok, raporlama, KVKK m.11 bilgi talebi
+dışa aktarımı ve düzeltme akışı, MFA zorunluluğu, orphan depo nesnesi temizliği.

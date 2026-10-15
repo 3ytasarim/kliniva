@@ -38,7 +38,7 @@ beforeAll(async () => {
     readonly: { role: "READ_ONLY" },
   });
   patientInA = (
-    await createPatient(T.users.doctor!.ctx, {
+    await createPatient(T.users.owner!.ctx, {
       firstName: "Can",
       lastName: "Şube-A",
       phone: "05321110001",
@@ -47,7 +47,7 @@ beforeAll(async () => {
     })
   ).id;
   patientInB = (
-    await createPatient(T.users.doctor!.ctx, {
+    await createPatient(T.users.owner!.ctx, {
       firstName: "Deniz",
       lastName: "Şube-B",
       phone: "05321110002",
@@ -66,7 +66,7 @@ describe("Branch manager yetkisi olmayan şubeye erişemez", () => {
   });
 
   it("listede yalnızca kendi şubesi", async () => {
-    const ids = (await listPatients(T.users.managerA!.ctx)).map((p) => p.id);
+    const ids = (await listPatients(T.users.managerA!.ctx)).items.map((p) => p.id);
     expect(ids).toContain(patientInA);
     expect(ids).not.toContain(patientInB);
     const branchIds = (await listBranches(T.users.managerA!.ctx)).map((b) => b.id);
@@ -101,6 +101,19 @@ describe("RECEPTION patient.health.read olmadan sağlık verisini göremez", () 
     );
     expect(res.status).toBe(200);
     expect(await res.text()).not.toContain("hipertansiyon");
+  });
+
+  it("DOCTOR hasta kaydı oluşturamaz (Sprint 2: patient.create yalnızca resepsiyon / yönetim)", async () => {
+    expect(
+      await code(
+        createPatient(T.users.doctor!.ctx, {
+          firstName: "G",
+          lastName: "H",
+          phone: "05320000004",
+          branchId: T.branchA,
+        }),
+      ),
+    ).toBe("FORBIDDEN");
   });
 
   it("doktor (patient.health.read) notu çözülmüş görür", async () => {

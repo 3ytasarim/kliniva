@@ -6,15 +6,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * Statik imza alanı (tablet / telefon / fare).
  *
  * KVKK — biyometrik veri toplanmaz:
- *  - Yalnızca anlık x/y koordinatı ile canvas'a çizgi çizilir; koordinatlar BİRİKTİRİLMEZ, saklanmaz, gönderilmez.
- *  - PointerEvent'in pressure, tiltX/tiltY, twist, width/height, timeStamp alanları OKUNMAZ.
- *  - Çizgi kalınlığı sabittir (basınca göre değişmez). Hız/ivme/vuruş zamanlaması hesaplanmaz.
- *  - Çıktı yalnızca canvas.toDataURL("image/png") — statik görüntü. Sunucu PNG'yi ayrıca temizler.
+ *  - Yalnızca O ANKİ x/y koordinatı ile canvas'a çizgi çizilir; koordinatlar BİRİKTİRİLMEZ (dizi/yörünge yok),
+ *    saklanmaz, sunucuya gönderilmez.
+ *  - PointerEvent'in pressure, tiltX/tiltY, twist, width/height, timeStamp alanları OKUNMAZ; hız / ivme /
+ *    zamanlama hesaplanmaz. Çizgi kalınlığı sabittir.
+ *  - Çıktı yalnızca canvas.toDataURL("image/png") — statik raster görüntü. Sunucu PNG'yi decode edip yeniden kodlar.
  */
 export function SignaturePad({
   onChange,
-  width = 600,
-  height = 220,
+  width = 900,
+  height = 300,
   label = "İmza alanı",
 }: {
   onChange: (pngDataUrl: string | null) => void;
@@ -26,14 +27,16 @@ export function SignaturePad({
   const drawing = useRef(false);
   const [empty, setEmpty] = useState(true);
 
-  useEffect(() => {
+  const setupContext = useCallback(() => {
     const ctx = canvasRef.current?.getContext("2d");
     if (!ctx) return;
-    ctx.lineWidth = 2.5;
+    ctx.lineWidth = 3;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    ctx.strokeStyle = "#111827";
+    ctx.strokeStyle = "#0f172a";
   }, []);
+
+  useEffect(setupContext, [setupContext]);
 
   const point = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -46,11 +49,14 @@ export function SignaturePad({
   const onDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const ctx = e.currentTarget.getContext("2d");
     if (!ctx) return;
+    e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     drawing.current = true;
     const { x, y } = point(e);
     ctx.beginPath();
     ctx.moveTo(x, y);
+    ctx.lineTo(x + 0.1, y + 0.1); // tek dokunuşta nokta
+    ctx.stroke();
   };
 
   const onMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -72,6 +78,7 @@ export function SignaturePad({
   const clear = () => {
     const c = canvasRef.current;
     c?.getContext("2d")?.clearRect(0, 0, c.width, c.height);
+    setupContext();
     setEmpty(true);
     onChange(null);
   };
@@ -84,17 +91,22 @@ export function SignaturePad({
         height={height}
         role="img"
         aria-label={label}
-        className="w-full touch-none rounded-lg border border-dashed border-slate-400 bg-white"
+        data-testid="signature-canvas"
+        className="aspect-[3/1] w-full cursor-crosshair touch-none rounded-2xl border-2 border-dashed border-slate-300 bg-white dark:border-slate-600"
         onPointerDown={onDown}
         onPointerMove={onMove}
         onPointerUp={finish}
         onPointerCancel={finish}
         onPointerLeave={finish}
       />
-      <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-        <span>{empty ? "Lütfen kutunun içine imzanızı atın." : "İmza alındı."}</span>
-        <button type="button" className="btn-ghost" onClick={clear}>
-          Temizle
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+        <span className="text-sm text-slate-500" aria-live="polite">
+          {empty
+            ? "Lütfen kutunun içine imzanızı atın."
+            : "İmza alındı. Gerekirse temizleyip yeniden çizebilirsiniz."}
+        </span>
+        <button type="button" className="btn-ghost min-h-12 px-6" onClick={clear} disabled={empty}>
+          İmzayı temizle
         </button>
       </div>
     </div>
