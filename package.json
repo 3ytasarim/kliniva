@@ -26,7 +26,8 @@
     "env:init": "tsx scripts/env-init.ts",
     "verify": "npm run typecheck && npm run lint && npm test && npm run test:integration && npm run build && npm run test:bundle",
     "db:app-role": "tsx --conditions=react-server scripts/db-app-role.ts",
-    "security:check-key": "tsx --conditions=react-server scripts/check-encryption-key.ts"
+    "security:check-key": "tsx --conditions=react-server scripts/check-encryption-key.ts",
+    "platform:admin": "tsx --conditions=react-server scripts/platform-admin.ts"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.2.2",

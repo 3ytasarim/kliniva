@@ -24,7 +24,7 @@ async function loginAndSave(
     const page = await context.newPage();
     await page.goto("/login");
     await page.getByLabel("Klinik kodu").fill(SLUG);
-    await page.getByLabel("E-posta").fill(creds.email);
+    await page.getByLabel("E-posta veya kullanıcı adı").fill(creds.email);
     await page.getByLabel("Parola").fill(creds.password);
     await page.getByRole("button", { name: "Giriş yap" }).click();
     try {

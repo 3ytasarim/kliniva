@@ -11,6 +11,7 @@ import { clearHits, isRateLimited, recordHit, RULES } from "@/server/security/ra
 import { verifyTotp } from "@/server/security/totp";
 import { logger } from "@/server/log/logger";
 import { normalizeEmail, slugSchema } from "@/server/validation";
+import { isEmailLike, normalizeUsername } from "@/server/auth/login-id";
 import type { RequestMeta } from "@/server/security/request-meta";
 import {
   createSession,
@@ -46,10 +47,12 @@ export async function login(
   const parsed = loginInputSchema.safeParse(raw);
   if (!parsed.success) return INVALID;
   const { tenantSlug, password } = parsed.data;
-  const emailNormalized = normalizeEmail(parsed.data.email);
+  // Giriş kimliği: @ içeriyorsa e-posta, değilse kullanıcı adı (ikisi de klinik içinde benzersiz).
+  const byEmail = isEmailLike(parsed.data.email);
+  const loginId = byEmail ? normalizeEmail(parsed.data.email) : normalizeUsername(parsed.data.email);
 
   const ipSubject = meta.ipHash ?? "no-ip";
-  const accountSubject = `${tenantSlug}:${emailNormalized}`;
+  const accountSubject = `${tenantSlug}:${loginId}`;
   if (
     (await isRateLimited(RULES.loginPerAccount, accountSubject)) ||
     (await isRateLimited(RULES.loginPerIp, ipSubject))
@@ -94,7 +97,12 @@ export async function login(
         twoFactorEnabled: users.twoFactorEnabled,
       })
       .from(users)
-      .where(and(eq(users.tenantId, scope.tenantId), eq(users.emailNormalized, emailNormalized)));
+      .where(
+        and(
+          eq(users.tenantId, scope.tenantId),
+          byEmail ? eq(users.emailNormalized, loginId) : eq(users.usernameNormalized, loginId),
+        ),
+      );
     return row;
   });
 

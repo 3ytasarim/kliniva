@@ -35,7 +35,7 @@ export default async function UsersPage() {
           <thead>
             <tr>
               <th scope="col">Ad Soyad</th>
-              <th scope="col">E-posta</th>
+              <th scope="col">Giriş</th>
               <th scope="col">Roller</th>
               <th scope="col">2FA</th>
               <th scope="col">Durum</th>
@@ -47,7 +47,10 @@ export default async function UsersPage() {
                 <td>
                   {u.firstName} {u.lastName}
                 </td>
-                <td>{u.email}</td>
+                <td>
+                  {u.username ? <span className="block font-mono text-xs">{u.username}</span> : null}
+                  {u.email ? <span className="block text-xs text-slate-500">{u.email}</span> : null}
+                </td>
                 <td>{describeRoles(u.roles)}</td>
                 <td>{u.twoFactorEnabled ? "Etkin" : "—"}</td>
                 <td>{u.active ? "Aktif" : "Pasif"}</td>
@@ -66,10 +69,20 @@ export default async function UsersPage() {
           >
             <Field label="Ad" name="firstName" required />
             <Field label="Soyad" name="lastName" required />
-            <Field label="E-posta" name="email" type="email" required autoComplete="off" />
+            <Field
+              label="Kullanıcı adı"
+              name="username"
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              maxLength={40}
+              hint="Girişte kullanılır. E-posta ya da kullanıcı adından biri zorunlu."
+            />
+            <Field label="E-posta (isteğe bağlı)" name="email" type="email" autoComplete="off" />
             <Field label="Telefon" name="phone" type="tel" />
             <Field
               label="Geçici parola (12+ karakter, harf ve rakam)"
+              hint="Kullanıcı ilk girişte kendi parolasını belirler."
               name="password"
               type="password"
               required

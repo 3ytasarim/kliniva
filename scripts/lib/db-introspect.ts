@@ -62,6 +62,9 @@ export const EXPECTED_TABLES = [
   "patient_tasks",
   "lab_panels",
   "lab_results",
+  "platform_admins",
+  "platform_sessions",
+  "platform_audit_logs",
 ] as const;
 
 /** RLS (ENABLE + FORCE) zorunlu tablolar: kiracı tabloları + platform/kiracı karışık tablolar. */
@@ -187,6 +190,10 @@ export const APP_PRIVILEGES: Record<string, string[]> = {
   // Sprint 8.4: tahliller (sonuç yalnızca geçersiz kılınır; tip pasifleştirilir)
   lab_panels: ["INSERT", "SELECT", "UPDATE"],
   lab_results: ["INSERT", "SELECT", "UPDATE"],
+  // Sprint 9: platform tabloları (kiracı dışı; RLS yok). Denetim kaydı yalnızca ekleme.
+  platform_admins: ["SELECT", "UPDATE"],
+  platform_sessions: ["INSERT", "SELECT", "UPDATE"],
+  platform_audit_logs: ["INSERT", "SELECT"],
 };
 
 export function isPoolerUrl(url: string | undefined): boolean | null {

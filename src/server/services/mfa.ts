@@ -20,7 +20,7 @@ import { tenantQuery, tenantWhere } from "@/server/tenant/tenant-query";
 export async function startMfaEnrollment(ctx: AuthContext): Promise<{ secret: string; uri: string }> {
   return tenantQuery(ctx, async (scope) => {
     const [user] = await scope.tx
-      .select({ enabled: users.twoFactorEnabled, email: users.email })
+      .select({ enabled: users.twoFactorEnabled, email: users.email, username: users.username })
       .from(users)
       .where(tenantWhere(users, scope, eq(users.id, ctx.userId)));
     if (!user) throw new AppError("NOT_FOUND");
@@ -38,7 +38,7 @@ export async function startMfaEnrollment(ctx: AuthContext): Promise<{ secret: st
       entityType: "user",
       entityId: ctx.userId,
     });
-    return { secret, uri: otpauthUri({ secret, account: user.email, issuer: "Kliniva AI" }) };
+    return { secret, uri: otpauthUri({ secret, account: user.email ?? user.username ?? ctx.userId, issuer: "Kliniva AI" }) };
   });
 }
 

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { requireUser } from "@/server/auth/guards";
 import { MFA_REQUIRED_ROLES } from "@/server/auth/permissions";
 import { ActionForm } from "@/components/action-form";
@@ -13,6 +14,18 @@ export default async function SecuritySettingsPage() {
   return (
     <section className="grid max-w-2xl gap-6">
       <h1 className="text-2xl font-bold">Güvenlik</h1>
+
+      <div className="card flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="font-semibold">Parola</h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            Kendi parolanızı istediğiniz zaman değiştirebilirsiniz.
+          </p>
+        </div>
+        <Link href="/account/password" className="btn-ghost">
+          Parolayı değiştir
+        </Link>
+      </div>
 
       <div className="card">
         <h2 className="font-semibold">İki adımlı doğrulama (TOTP)</h2>

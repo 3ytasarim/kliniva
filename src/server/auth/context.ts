@@ -46,7 +46,9 @@ export async function buildContext(
         firstName: users.firstName,
         lastName: users.lastName,
         email: users.email,
+        username: users.username,
         twoFactorEnabled: users.twoFactorEnabled,
+        mustChangePassword: users.mustChangePassword,
       })
       .from(users)
       .where(and(eq(users.tenantId, scope.tenantId), eq(users.id, userId)));
@@ -83,7 +85,9 @@ export async function buildContext(
         firstName: user.firstName,
         lastName: user.lastName,
         email: user.email,
+        username: user.username,
         twoFactorEnabled: user.twoFactorEnabled,
+        mustChangePassword: user.mustChangePassword,
       },
     } satisfies AuthContext;
   });

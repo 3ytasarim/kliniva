@@ -132,6 +132,16 @@ Sonuç girildiği andaki ad / birim / aralık sonuçta saklanır (tip sonradan d
 şifreli; düzeltme yok, gerekçeyle geçersiz kılınır. Yetki: tip yönetimi `clinic.manage`, sonuç
 `patient.health.write` / `patient.health.read`. Migration 0030–0031.
 
+## Sprint 9 — Platform yönetimi (klinik açma) ✅
+
+Programı satan taraf için ayrı platform paneli (`/platform`): ayrı çerez, 8 saat / 30 dk boşta oturum, iki adımlı
+doğrulama zorunlu. Platform yöneticisi yalnızca sunucuda komutla açılır (`npm run platform:admin`, parola ortam
+değişkeninden). Yeni klinik: rastgele klinik kodu (`kl-xxxxxx`), "Merkez" şubesi, klinik profili, varsayılan hasta
+kaynakları ve kasa kategorileri, klinik yöneticisi (kullanıcı adı veya e-posta + geçici parola). Geçici parolayla
+giren kullanıcı önce parolasını değiştirmek zorundadır (`/account/password`); personel de kullanıcı adıyla açılabilir.
+Klinik askıya alma / etkinleştirme (oturumlar düşer), yönetici parolası sıfırlama. Platform hasta verisi görmez;
+tüm işlemler oturum doğrulayan DB fonksiyonlarıyla. Migration 0032–0034.
+
 ## Sprint 8+ (öneri)
 
 Hekim Rehberi karşılaştırması sırası (1–6 tamam): (7) hasta bildirimleri (SMS / WhatsApp — sağlayıcı kararı gerekli), (8) online randevu

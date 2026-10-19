@@ -12,7 +12,7 @@ test("login sayfası: başlık, erişilebilir form, CSP ve güvenlik başlıklar
   expect(res?.status()).toBe(200);
   await expect(page).toHaveTitle(/Kliniva AI/);
   await expect(page.getByLabel("Klinik kodu")).toBeVisible();
-  await expect(page.getByLabel("E-posta")).toBeVisible();
+  await expect(page.getByLabel("E-posta veya kullanıcı adı")).toBeVisible();
   await expect(page.getByLabel("Parola")).toHaveAttribute("type", "password");
 
   const h = res!.headers();

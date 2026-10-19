@@ -11,6 +11,7 @@ import { hashPassword, passwordPolicy } from "@/server/security/password";
 import { tenantQuery, tenantWhere, type TenantScope } from "@/server/tenant/tenant-query";
 import { emailSchema, nameSchema, normalizeEmail, phoneSchema, uuidSchema } from "@/server/validation";
 import { parseInput } from "@/server/services/parse";
+import { usernameSchema } from "@/server/auth/login-id";
 
 /**
  * Kullanıcı ve rol yönetimi.
@@ -23,14 +24,21 @@ const roleAssignmentSchema = z.object({
   branchId: z.preprocess((v) => (v === "" ? null : v), uuidSchema.nullable()),
 });
 
-export const createUserSchema = z.object({
-  email: emailSchema,
-  firstName: nameSchema,
-  lastName: nameSchema,
-  phone: z.preprocess((v) => (v === "" ? undefined : v), phoneSchema.optional()),
-  password: passwordPolicy,
-  roles: z.array(roleAssignmentSchema).min(1).max(10),
-});
+const blankToUndefined = (v: unknown) => (typeof v === "string" && v.trim() === "" ? undefined : v);
+export const createUserSchema = z
+  .object({
+    email: z.preprocess(blankToUndefined, emailSchema.optional()),
+    username: z.preprocess(blankToUndefined, usernameSchema.optional()),
+    firstName: nameSchema,
+    lastName: nameSchema,
+    phone: z.preprocess((v) => (v === "" ? undefined : v), phoneSchema.optional()),
+    password: passwordPolicy,
+    roles: z.array(roleAssignmentSchema).min(1).max(10),
+  })
+  .refine((d) => d.email || d.username, {
+    message: "E-posta ya da kullanıcı adı girin.",
+    path: ["username"],
+  });
 
 export async function listUsers(ctx: AuthContext) {
   requirePermission(ctx, "user.read");
@@ -39,6 +47,7 @@ export async function listUsers(ctx: AuthContext) {
       .select({
         id: users.id,
         email: users.email,
+        username: users.username,
         firstName: users.firstName,
         lastName: users.lastName,
         active: users.active,
@@ -107,20 +116,36 @@ export async function createUser(ctx: AuthContext, input: unknown): Promise<{ id
   const passwordHash = await hashPassword(data.password);
   return tenantQuery(ctx, async (scope) => {
     const resolved = await resolveAssignableRoles(scope, ctx, data.roles);
-    const emailNormalized = normalizeEmail(data.email);
-    const [existing] = await scope.tx
-      .select({ id: users.id })
-      .from(users)
-      .where(tenantWhere(users, scope, eq(users.emailNormalized, emailNormalized)));
-    if (existing) throw new AppError("CONFLICT", { fields: ["email"] });
+    const emailNormalized = data.email ? normalizeEmail(data.email) : null;
+    const usernameNormalized = data.username ?? null;
+    if (emailNormalized) {
+      const [existing] = await scope.tx
+        .select({ id: users.id })
+        .from(users)
+        .where(tenantWhere(users, scope, eq(users.emailNormalized, emailNormalized)));
+      if (existing) throw new AppError("CONFLICT", { fields: ["email"] });
+    }
+    if (usernameNormalized) {
+      const [existing] = await scope.tx
+        .select({ id: users.id })
+        .from(users)
+        .where(tenantWhere(users, scope, eq(users.usernameNormalized, usernameNormalized)));
+      if (existing) {
+        throw new AppError("CONFLICT", { fields: ["username"], message: "Bu kullanıcı adı kullanılıyor." });
+      }
+    }
 
     const [user] = await scope.tx
       .insert(users)
       .values({
         tenantId: scope.tenantId,
-        email: data.email.trim(),
+        email: data.email?.trim() ?? null,
         emailNormalized,
+        username: usernameNormalized,
+        usernameNormalized,
         passwordHash,
+        // Yönetici tarafından verilen parola geçicidir: kullanıcı ilk girişte değiştirir.
+        mustChangePassword: true,
         firstName: data.firstName,
         lastName: data.lastName,
         phone: data.phone ?? null,

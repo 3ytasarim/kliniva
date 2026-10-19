@@ -225,6 +225,27 @@
       "when": 1792361552700,
       "tag": "0031_lab_results_security",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792435666501,
+      "tag": "0032_platform",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1792435701149,
+      "tag": "0033_platform_security",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1792436740919,
+      "tag": "0034_platform_create_tenant_fix",
+      "breakpoints": true
     }
   ]
 }

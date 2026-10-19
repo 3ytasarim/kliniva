@@ -25,7 +25,15 @@ export type AuthContext = {
    * türetilir; model / istemci bu alanı belirleyemez.
    */
   readonly channel?: "AI_VOICE" | "AI_CHAT";
-  readonly user: { firstName: string; lastName: string; email: string; twoFactorEnabled: boolean };
+  readonly user: {
+    firstName: string;
+    lastName: string;
+    email: string | null;
+    username: string | null;
+    twoFactorEnabled: boolean;
+    /** Geçici parolayla giriş yapıldı → parola değişene kadar uygulama kullanılamaz. */
+    mustChangePassword: boolean;
+  };
 };
 
 export const hasPermission = (ctx: AuthContext, perm: Permission) => ctx.permissions.has(perm);

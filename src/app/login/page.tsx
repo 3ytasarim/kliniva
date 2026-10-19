@@ -38,7 +38,14 @@ export default function LoginPage() {
               autoComplete="organization"
               placeholder="örn. demo-klinik"
             />
-            <Field label="E-posta" name="email" type="email" required autoComplete="username" />
+            <Field
+              label="E-posta veya kullanıcı adı"
+              name="email"
+              required
+              autoComplete="username"
+              autoCapitalize="none"
+              spellCheck={false}
+            />
             <Field label="Parola" name="password" type="password" required autoComplete="current-password" />
           </ActionForm>
         </div>

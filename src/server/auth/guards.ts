@@ -34,8 +34,10 @@ export function sessionTokenFromRequest(req: Request): string | null {
   return null;
 }
 
-/** Sayfa / server action: oturum yoksa /login'e, MFA bekliyorsa /login/mfa'ya yönlendirir. */
-export const requireUser = cache(async (): Promise<AuthContext> => {
+/**
+ * Oturum doğrulama (parola değişimi zorunluluğuna bakmadan). Yalnızca /account/password sayfası doğrudan kullanır.
+ */
+export const requireUserForPasswordChange = cache(async (): Promise<AuthContext> => {
   const token = await sessionTokenFromCookies();
   const meta = requestMetaFrom(await headers());
   const ctx = await authenticate(token, meta);
@@ -43,6 +45,16 @@ export const requireUser = cache(async (): Promise<AuthContext> => {
   const session = await resolveSession(token);
   if (session?.state === "MFA_PENDING") redirect("/login/mfa");
   redirect("/login");
+});
+
+/**
+ * Sayfa / server action: oturum yoksa /login'e, MFA bekliyorsa /login/mfa'ya yönlendirir. Geçici parolayla giriş
+ * yapıldıysa (must_change_password) parola değişene kadar her sayfa /account/password'e yönlendirir.
+ */
+export const requireUser = cache(async (): Promise<AuthContext> => {
+  const ctx = await requireUserForPasswordChange();
+  if (ctx.user.mustChangePassword) redirect("/account/password");
+  return ctx;
 });
 
 /** Sayfa için oturumdaki kiracı (klinik) kaydı. tenantId her zaman oturumdan gelir. */
@@ -60,5 +72,7 @@ export const requireTenant = cache(async () => {
 export async function requireUserFromRequest(req: Request): Promise<AuthContext> {
   const ctx = await authenticate(sessionTokenFromRequest(req), requestMetaFrom(req.headers));
   if (!ctx) throw new AppError("UNAUTHENTICATED");
+  // Geçici parola değişmeden API kullanılamaz (sayfalar zaten /account/password'e yönlenir).
+  if (ctx.user.mustChangePassword) throw new AppError("FORBIDDEN", { message: "Önce parolanızı değiştirin." });
   return ctx;
 }

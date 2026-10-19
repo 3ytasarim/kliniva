@@ -150,6 +150,11 @@ export async function createTenant(
   return result;
 }
 
+/** Fikstür dışında (ör. platform fonksiyonuyla) oluşturulan kiracıyı temizlik listesine ekler. */
+export function trackTenantForCleanup(id: string) {
+  createdTenants.push(id);
+}
+
 /** Test kiracılarını yasal imha bağlamında siler (imzalı belge / audit tetikleyicileri bu bağlamda izin verir). */
 export async function cleanupTenants() {
   if (!createdTenants.length) return;

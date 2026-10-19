@@ -45,6 +45,8 @@ const eslintConfig = defineConfig([
       "src/server/auth/rbac-sync.ts",
       "src/server/security/rate-limit.ts",
       "src/server/services/mfa.ts",
+      // Platform (yazılım sahibi) katmanı: kiracı verisine dokunmaz; kiracı işlemleri oturum doğrulayan DB fonksiyonlarıyla.
+      "src/server/platform/**",
     ],
     rules: {
       "no-restricted-imports": [

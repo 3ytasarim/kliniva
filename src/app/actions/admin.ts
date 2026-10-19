@@ -13,6 +13,7 @@ export async function createUserAction(_p: ActionState, form: FormData): Promise
     const data = formToObject(form);
     await createUser(await requireUser(), {
       email: data.email,
+      username: data.username,
       firstName: data.firstName,
       lastName: data.lastName,
       phone: data.phone,

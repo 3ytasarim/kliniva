@@ -203,9 +203,15 @@ export const users = kliniva.table(
     tenantId: uuid("tenant_id")
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
-    email: text("email").notNull(),
-    emailNormalized: text("email_normalized").notNull(),
+    /** E-posta veya kullanıcı adından en az biri zorunlu (CHECK). */
+    email: text("email"),
+    emailNormalized: text("email_normalized"),
+    /** Klinik içinde benzersiz giriş adı (küçük harf, rakam, . _ -). */
+    username: text("username"),
+    usernameNormalized: text("username_normalized"),
     passwordHash: text("password_hash").notNull(),
+    /** Geçici parola (yönetici / platform tarafından verildi) → ilk girişte değiştirmek zorunlu. */
+    mustChangePassword: boolean("must_change_password").notNull().default(false),
     firstName: text("first_name").notNull(),
     lastName: text("last_name").notNull(),
     phone: text("phone"),
@@ -223,6 +229,12 @@ export const users = kliniva.table(
   (t) => [
     unique("users_tenant_id_uq").on(t.tenantId, t.id),
     unique("users_tenant_email_uq").on(t.tenantId, t.emailNormalized),
+    unique("users_tenant_username_uq").on(t.tenantId, t.usernameNormalized),
+    check("users_login_id_ck", sql`${t.emailNormalized} is not null or ${t.usernameNormalized} is not null`),
+    check(
+      "users_username_ck",
+      sql`${t.usernameNormalized} is null or ${t.usernameNormalized} ~ '^[a-z0-9][a-z0-9._-]{2,39}$'`,
+    ),
   ],
 );
 
@@ -2332,5 +2344,69 @@ export const labResults = kliniva.table(
       sql`(${t.status} = 'ACTIVE' and ${t.voidedAt} is null and ${t.voidedByUserId} is null and ${t.voidReason} is null) or (${t.status} = 'VOIDED' and ${t.voidedAt} is not null and ${t.voidedByUserId} is not null and length(${t.voidReason}) between 3 and 300)`,
     ),
     index("lab_results_patient_idx").on(t.tenantId, t.patientId, t.sampleDate),
+  ],
+);
+
+// ---------------------------------------------------------------- Sprint 9: platform yönetimi
+
+/**
+ * Platform yöneticisi (yazılım sahibi) — hiçbir kliniğe bağlı değildir ve klinik verisine (hasta vb.) erişemez.
+ * Klinik açma / askıya alma / yönetici parolası sıfırlama yalnızca oturum doğrulayan SECURITY DEFINER
+ * fonksiyonlarla yapılır. İki adımlı doğrulama zorunludur (ilk girişte kurulum).
+ */
+export const platformAdmins = kliniva.table("platform_admins", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  email: text("email").notNull(),
+  emailNormalized: text("email_normalized").notNull().unique(),
+  displayName: text("display_name").notNull(),
+  passwordHash: text("password_hash").notNull(),
+  twoFactorEnabled: boolean("two_factor_enabled").notNull().default(false),
+  twoFactorSecretEncrypted: text("two_factor_secret_encrypted"),
+  twoFactorLastUsedStep: bigint("two_factor_last_used_step", { mode: "number" }),
+  active: boolean("active").notNull().default(true),
+  lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export const platformSessionState = kliniva.enum("platform_session_state", [
+  "MFA_SETUP",
+  "MFA_PENDING",
+  "ACTIVE",
+]);
+export const platformSessions = kliniva.table(
+  "platform_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tokenHash: text("token_hash").notNull().unique(),
+    adminId: uuid("admin_id")
+      .notNull()
+      .references(() => platformAdmins.id, { onDelete: "cascade" }),
+    state: platformSessionState("state").notNull(),
+    createdAt: createdAt(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    ipHash: text("ip_hash"),
+    userAgentSummary: text("user_agent_summary"),
+  },
+  (t) => [index("platform_sessions_admin_idx").on(t.adminId)],
+);
+
+/** Platform işlemleri denetim kaydı (yalnızca ekleme). Kişisel veri / parola yazılmaz. */
+export const platformAuditLogs = kliniva.table(
+  "platform_audit_logs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    adminId: uuid("admin_id").references(() => platformAdmins.id, { onDelete: "set null" }),
+    action: text("action").notNull(),
+    targetTenantId: uuid("target_tenant_id"),
+    metadataSafe: jsonb("metadata_safe").notNull().default({}),
+    ipHash: text("ip_hash"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    check("platform_audit_action_ck", sql`${t.action} ~ '^[A-Z_]{3,60}$'`),
+    index("platform_audit_created_idx").on(t.createdAt),
   ],
 );
