@@ -53,6 +53,15 @@ export const EXPECTED_TABLES = [
   "voice_sessions",
   "ai_action_logs",
   "pending_ai_actions",
+  "clinical_notes",
+  "patient_charges",
+  "cash_categories",
+  "cash_transactions",
+  "patient_lookups",
+  "clinical_attachments",
+  "patient_tasks",
+  "lab_panels",
+  "lab_results",
 ] as const;
 
 /** RLS (ENABLE + FORCE) zorunlu tablolar: kiracı tabloları + platform/kiracı karışık tablolar. */
@@ -97,6 +106,15 @@ export const RLS_TABLES = [
   "voice_sessions",
   "ai_action_logs",
   "pending_ai_actions",
+  "clinical_notes",
+  "patient_charges",
+  "cash_categories",
+  "cash_transactions",
+  "patient_lookups",
+  "clinical_attachments",
+  "patient_tasks",
+  "lab_panels",
+  "lab_results",
 ] as const;
 
 /** Uygulama rolünün tablo bazında OLMASI GEREKEN yetkiler (fazlası da eksiği de hata). */
@@ -154,6 +172,21 @@ export const APP_PRIVILEGES: Record<string, string[]> = {
   voice_sessions: ["INSERT", "SELECT"],
   ai_action_logs: ["INSERT", "SELECT"],
   pending_ai_actions: ["INSERT", "SELECT"],
+  // Sprint 7.3: muayene kaydı yalnızca ekleme (sürüm); UPDATE / DELETE yok
+  clinical_notes: ["INSERT", "SELECT"],
+  // Sprint 8: finans defterleri — UPDATE yalnızca iptal (tetikleyici), DELETE yok
+  patient_charges: ["INSERT", "SELECT", "UPDATE"],
+  cash_transactions: ["INSERT", "SELECT", "UPDATE"],
+  cash_categories: ["INSERT", "SELECT", "UPDATE"],
+  // Sprint 8.1: hasta tanımları (silme yok; pasifleştirilir)
+  patient_lookups: ["INSERT", "SELECT", "UPDATE"],
+  // Sprint 8.2: muayene dosyaları — UPDATE yalnızca geçersiz kılma (tetikleyici), DELETE yok
+  clinical_attachments: ["INSERT", "SELECT", "UPDATE"],
+  // Sprint 8.3: hasta görevleri (silinmez, iptal edilir)
+  patient_tasks: ["INSERT", "SELECT", "UPDATE"],
+  // Sprint 8.4: tahliller (sonuç yalnızca geçersiz kılınır; tip pasifleştirilir)
+  lab_panels: ["INSERT", "SELECT", "UPDATE"],
+  lab_results: ["INSERT", "SELECT", "UPDATE"],
 };
 
 export function isPoolerUrl(url: string | undefined): boolean | null {
@@ -390,6 +423,13 @@ export async function checkAppRole(c: ClientBase, role = APP_ROLE): Promise<AppR
     if (!n7.p_status) mismatches.push("pending_ai_actions.status: UPDATE yok");
     if (n7.l_tool) mismatches.push("ai_action_logs.tool_name: gereksiz UPDATE");
   }
+  // Sohbet kanalı (0018+): oturum kanalı uygulama rolünce değiştirilemez.
+  const s8 = await c
+    .query(`select has_column_privilege($1, 'kliniva.voice_sessions', 'channel', 'UPDATE') as v_channel`, [
+      role,
+    ])
+    .catch(() => ({ rows: [] as Record<string, boolean>[] }));
+  if (s8.rows[0]?.v_channel) mismatches.push("voice_sessions.channel: gereksiz UPDATE");
   return {
     exists: true,
     canLogin: a.rolcanlogin,

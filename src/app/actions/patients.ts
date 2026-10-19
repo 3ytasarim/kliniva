@@ -7,8 +7,10 @@ import {
   createPatient,
   findPossibleDuplicatePatients,
   updatePatient,
+  updatePatientHealthProfile,
   type DuplicateCandidate,
 } from "@/server/services/patients";
+import { createPatientLookup, setPatientLookupActive } from "@/server/services/patient-lookups";
 import {
   createPatientDocument,
   createTemplateVersion,
@@ -157,5 +159,32 @@ export async function publishTemplateAction(_p: ActionState, form: FormData): Pr
     await publishTemplate(await requireUser(), form.get("id"));
     revalidatePath("/settings/documents");
     return "Şablon yayımlandı; önceki versiyon pasifleşti (imzalı belgeler etkilenmez).";
+  });
+}
+
+// ---------------------------------------------------------------- Sprint 8.1: sağlık profili + hasta tanımları
+export async function updateHealthProfileAction(_p: ActionState, form: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const { id, ...rest } = formToObject(form);
+    await updatePatientHealthProfile(await requireUser(), id, rest);
+    revalidatePath(`/patients/${id}`);
+    return "Sağlık bilgileri kaydedildi.";
+  });
+}
+
+export async function createPatientLookupAction(_p: ActionState, form: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    await createPatientLookup(await requireUser(), formToObject(form));
+    revalidatePath("/settings/patient-definitions");
+    return "Tanım eklendi.";
+  });
+}
+
+export async function togglePatientLookupAction(_p: ActionState, form: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const { id, active } = formToObject(form);
+    await setPatientLookupActive(await requireUser(), id, active === "true");
+    revalidatePath("/settings/patient-definitions");
+    return active === "true" ? "Tanım etkinleştirildi." : "Tanım pasifleştirildi.";
   });
 }

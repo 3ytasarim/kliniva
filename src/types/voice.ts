@@ -28,3 +28,19 @@ export type VoiceMockTurn = {
 
 export type VoiceUiState =
   "idle" | "connecting" | "listening" | "thinking" | "speaking" | "tool" | "confirm" | "error";
+
+/** Yazılı sohbet oturumu: istemciye sır DÖNMEZ (model çağrısı sunucuda). */
+export type ChatSessionStartResponse = {
+  sessionId: string;
+  transport: "openai" | "mock";
+  language: "tr" | "en";
+  privacyMode: "STANDARD" | "DISCREET";
+};
+
+export type ChatTurnResponse = {
+  reply: string;
+  toolCalls: { name: string; output: VoiceToolOutput }[];
+  pending: { actionId: string; summary: string } | null;
+  settled: boolean;
+  grounded: boolean;
+};

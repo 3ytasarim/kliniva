@@ -16,7 +16,12 @@ import {
   type Signer,
 } from "@/components/document-sign";
 import { checkDuplicatesAction, createPatientAction, prepareDocumentAction } from "@/app/actions/patients";
-import type { DocumentPreview, DuplicateCandidate } from "@/types/patients";
+import {
+  SOCIAL_SECURITY_OPTIONS,
+  type DocumentPreview,
+  type DuplicateCandidate,
+  type PatientLookup,
+} from "@/types/patients";
 
 /**
  * Yeni hasta + KVKK sihirbazı:
@@ -51,12 +56,17 @@ export function PatientWizard({
   defaultBranchId,
   hasConsentTemplate,
   hasDisclosureTemplate,
+  lookups = [],
 }: {
   branches: Branch[];
   defaultBranchId?: string;
   hasConsentTemplate: boolean;
   hasDisclosureTemplate: boolean;
+  /** Etkin hasta tanımları (kaynak / sigorta). */
+  lookups?: PatientLookup[];
 }) {
+  const sources = lookups.filter((l) => l.kind === "SOURCE");
+  const insurers = lookups.filter((l) => l.kind === "INSURER");
   const [step, setStep] = useState(1);
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -244,11 +254,77 @@ export function PatientWizard({
               ))}
             </select>
           </div>
+          {sources.length ? (
+            <div>
+              <label htmlFor="pw-source" className="label">
+                Hasta kaynağı
+              </label>
+              <select
+                id="pw-source"
+                value={values.sourceId ?? ""}
+                onChange={set("sourceId")}
+                className="input"
+              >
+                <option value="">Belirtilmedi</option>
+                {sources.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+          <label className="flex min-h-11 items-center gap-2 self-end text-sm">
+            <input
+              type="checkbox"
+              checked={values.smsAllowed === "true"}
+              onChange={(e) => setValues((v) => ({ ...v, smsAllowed: e.target.checked ? "true" : "false" }))}
+            />
+            Bilgilendirme SMS’i gönderilebilir
+          </label>
           <details className="panel sm:col-span-2">
             <summary className="cursor-pointer text-sm font-medium text-brand-700">
               Ek bilgiler (isteğe bağlı)
             </summary>
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <div>
+                <label htmlFor="pw-socialSecurity" className="label">
+                  Sosyal güvence
+                </label>
+                <select
+                  id="pw-socialSecurity"
+                  value={values.socialSecurity ?? ""}
+                  onChange={set("socialSecurity")}
+                  className="input"
+                >
+                  <option value="">Belirtilmedi</option>
+                  {SOCIAL_SECURITY_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {insurers.length ? (
+                <div>
+                  <label htmlFor="pw-insurer" className="label">
+                    Özel sigorta
+                  </label>
+                  <select
+                    id="pw-insurer"
+                    value={values.insurerId ?? ""}
+                    onChange={set("insurerId")}
+                    className="input"
+                  >
+                    <option value="">Yok</option>
+                    {insurers.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
               {(
                 [
                   ["secondaryPhone", "İkinci telefon", "tel"],
@@ -258,6 +334,7 @@ export function PatientWizard({
                   ["district", "İlçe", "text"],
                   ["emergencyContactName", "Acil durumda aranacak kişi", "text"],
                   ["emergencyContactPhone", "Acil durum telefonu", "tel"],
+                  ["referral", "Yönlendiren (kişi / kurum)", "text"],
                 ] as const
               ).map(([k, label, type]) => (
                 <div key={k}>

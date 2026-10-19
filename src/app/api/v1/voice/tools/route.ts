@@ -20,7 +20,7 @@ export async function POST(req: Request) {
       arguments?: unknown;
       utterance?: unknown;
     };
-    const tc = await loadVoiceToolContext(ctx, body.sessionId, body.utterance);
+    const tc = await loadVoiceToolContext(ctx, body.sessionId, body.utterance, "VOICE");
     let args: unknown = body.arguments ?? {};
     if (typeof args === "string") {
       try {

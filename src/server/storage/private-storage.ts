@@ -20,7 +20,7 @@ import { amzDateOf, encodeKeyPath, sha256Hex, signV4 } from "@/server/storage/si
  *
  * Sürücü: PRIVATE_STORAGE_DRIVER=local (varsayılan, geliştirme) | s3 (S3 / Cloudflare R2 uyumlu, üretim).
  */
-export type StorageKind = "documents" | "signatures" | "logos";
+export type StorageKind = "documents" | "signatures" | "logos" | "clinical";
 
 export interface PrivateStorage {
   put(key: string, data: Buffer): Promise<void>;
@@ -31,7 +31,7 @@ export interface PrivateStorage {
 }
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-const KEY_RE = new RegExp(`^tenant/(${UUID})/(documents|signatures|logos)/(${UUID})\\.bin$`);
+const KEY_RE = new RegExp(`^tenant/(${UUID})/(documents|signatures|logos|clinical)/(${UUID})\\.bin$`);
 /** Sprint 0–1 biçimi — yalnızca OKUMA için kabul edilir. */
 const LEGACY_KEY_RE = new RegExp(`^(${UUID})/(signatures|pdfs|logos)/(${UUID})\\.(png|pdf)$`);
 

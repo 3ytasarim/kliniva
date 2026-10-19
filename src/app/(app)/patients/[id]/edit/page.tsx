@@ -9,6 +9,8 @@ import { updatePatientAction } from "@/app/actions/patients";
 import { ActionForm, Field, SelectField } from "@/components/action-form";
 import { Forbidden } from "@/components/forbidden";
 import { PageHeader } from "@/components/ui";
+import { listPatientLookups } from "@/server/services/patient-lookups";
+import { SOCIAL_SECURITY_OPTIONS } from "@/types/patients";
 
 export const metadata: Metadata = { title: "Hasta düzenle" };
 
@@ -33,6 +35,12 @@ export default async function EditPatientPage({ params }: { params: Promise<{ id
     throw e;
   }
   const branches = hasPermission(ctx, "branch.read") ? await accessibleBranchOptions(ctx) : [];
+  const lookups = await listPatientLookups(ctx);
+  // Pasif tanımlar yeni seçilemez; hastada kayıtlı olan (pasif olsa bile) listede kalır.
+  const options = (kind: "SOURCE" | "INSURER", current: string | null) =>
+    lookups
+      .filter((l) => l.kind === kind && (l.active || l.id === current))
+      .map((l) => ({ value: l.id, label: l.active ? l.name : `${l.name} (pasif)` }));
 
   return (
     <section className="max-w-4xl">
@@ -125,6 +133,46 @@ export default async function EditPatientPage({ params }: { params: Promise<{ id
             defaultValue={p.emergencyContactPhone ?? ""}
             idPrefix="pe"
           />
+          <h2 className="border-t border-line pt-4 text-sm font-semibold sm:col-span-2 dark:border-line-dark">
+            Kaynak ve sigorta
+          </h2>
+          <SelectField
+            label="Hasta kaynağı"
+            name="sourceId"
+            options={options("SOURCE", p.sourceId)}
+            defaultValue={p.sourceId ?? ""}
+            placeholder="Belirtilmedi"
+            idPrefix="pe"
+          />
+          <Field
+            label="Yönlendiren (kişi / kurum)"
+            name="referral"
+            maxLength={120}
+            defaultValue={p.referral ?? ""}
+            idPrefix="pe"
+          />
+          <SelectField
+            label="Sosyal güvence"
+            name="socialSecurity"
+            options={SOCIAL_SECURITY_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+            defaultValue={p.socialSecurity ?? ""}
+            placeholder="Belirtilmedi"
+            idPrefix="pe"
+          />
+          <SelectField
+            label="Özel sigorta"
+            name="insurerId"
+            options={options("INSURER", p.insurerId)}
+            defaultValue={p.insurerId ?? ""}
+            placeholder="Yok"
+            idPrefix="pe"
+          />
+          <label className="flex min-h-11 items-center gap-2 text-sm sm:col-span-2">
+            {/* Kutu işaretsizken de değer gitsin (aksi halde "değişmedi" sayılır). */}
+            <input type="hidden" name="smsAllowed" value="false" />
+            <input type="checkbox" name="smsAllowed" value="true" defaultChecked={p.smsAllowed} />
+            Bilgilendirme SMS’i gönderilebilir (hasta beyanı)
+          </label>
         </ActionForm>
       </div>
     </section>

@@ -1,18 +1,29 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Plus } from "lucide-react";
 import { requireUser } from "@/server/auth/guards";
 import { hasPermission } from "@/server/auth/authz";
 import { clinicToday, listAppointments } from "@/server/services/appointments";
+import { getClinicProfile } from "@/server/services/clinic";
 import { accessibleBranchOptions } from "@/server/services/org";
 import { listDoctors } from "@/server/services/doctors";
 import { Forbidden } from "@/components/forbidden";
-import { EmptyState, PageHeader } from "@/components/ui";
+import { EmptyState, PageHeader, SectionCard } from "@/components/ui";
+import { Button } from "@/components/ui/button";
+import { AppointmentsToolbar } from "@/components/appointments-toolbar";
 import {
   AppointmentCalendar,
+  clinicMinutesNow,
+  hasStartedAt,
   type CalendarColumn,
   type CalendarItem,
 } from "@/components/appointment-calendar";
-import { APPOINTMENT_STATUS, AppointmentStatusBadge, formatLocalDate } from "@/components/appointment-ui";
+import {
+  APPOINTMENT_STATUS,
+  AppointmentStatusBadge,
+  formatLocalDate,
+  quickActions,
+} from "@/components/appointment-ui";
 import { DAYS, addDays, isValidDate, isoDayOfWeek } from "@/lib/time";
 import type { AppointmentStatus } from "@/types/appointments";
 
@@ -29,7 +40,7 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
   if (!hasPermission(ctx, "appointment.read") && !hasPermission(ctx, "appointment.read.own"))
     return <Forbidden />;
   const sp = await searchParams;
-  const today = await clinicToday(ctx);
+  const [today, profile] = await Promise.all([clinicToday(ctx), getClinicProfile(ctx)]);
   const view = sp.view === "week" ? "week" : "day";
   const date = sp.date && isValidDate(sp.date) ? sp.date : today;
   const status = sp.status && sp.status in APPOINTMENT_STATUS ? (sp.status as AppointmentStatus) : undefined;
@@ -46,16 +57,17 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
     doctorId: sp.doctor || undefined,
     status,
   });
+  const canCreate = hasPermission(ctx, "appointment.create");
+  const newHref = `/appointments/new?date=${date >= today ? date : today}`;
 
-  const qs = (patch: Partial<Search>) => {
-    const u = new URLSearchParams();
-    const merged = { view, date, branch: sp.branch, doctor: sp.doctor, status: sp.status, ...patch };
-    for (const [k, v] of Object.entries(merged)) if (v) u.set(k, v);
-    return `/appointments?${u.toString()}`;
+  const perms = {
+    checkin: hasPermission(ctx, "appointment.checkin"),
+    start: hasPermission(ctx, "appointment.start"),
+    complete: hasPermission(ctx, "appointment.complete"),
+    noShow: hasPermission(ctx, "appointment.no_show"),
   };
-  const step = view === "week" ? 7 : 1;
-
   const calItems: CalendarItem[] = items.map((a) => ({
+    actions: quickActions(a.status, perms, hasStartedAt(a.start)),
     id: a.id,
     column: view === "week" ? a.localDate : a.doctor.id,
     status: a.status,
@@ -66,133 +78,72 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
     room: a.room?.name ?? null,
     service: a.service?.name ?? null,
   }));
+
   let columns: CalendarColumn[];
   if (view === "week") {
     columns = DAYS.map((d, i) => {
       const day = addDays(weekStart, i);
       return {
         key: day,
-        title: d.long,
-        subtitle: day.slice(8, 10) + "." + day.slice(5, 7),
+        title: d.short,
+        dayNumber: String(Number(day.slice(8, 10))),
         highlight: day === today,
+        kind: "day",
       };
     });
   } else {
-    const seen = new Map<string, string>();
-    for (const a of items) seen.set(a.doctor.id, a.doctor.name);
-    columns = [...seen.entries()]
-      .sort((a, b) => a[1].localeCompare(b[1], "tr"))
-      .map(([key, title]) => ({ key, title }));
+    // Gün görünümü: o gün çalışan (filtreye uyan) doktorlar + randevusu olan doktorlar — boş gün de takvim olarak görünür.
+    const cols = new Map<string, CalendarColumn>();
+    for (const d of doctors) {
+      if (sp.doctor && d.id !== sp.doctor) continue;
+      if (sp.branch && !d.branches.some((b) => b.id === sp.branch)) continue;
+      if (!d.workingDays.includes(isoDayOfWeek(date))) continue;
+      cols.set(d.id, { key: d.id, title: d.displayName, subtitle: d.specialty, kind: "doctor" });
+    }
+    for (const a of items) {
+      if (!cols.has(a.doctor.id))
+        cols.set(a.doctor.id, { key: a.doctor.id, title: a.doctor.name, kind: "doctor" });
+    }
+    columns = [...cols.values()].sort((a, b) => a.title.localeCompare(b.title, "tr"));
   }
   const tooManyColumns = view === "day" && columns.length > 7;
+  const nowCols = view === "week" ? [today] : date === today ? columns.map((c) => c.key) : [];
+  const now = nowCols.length ? { columns: nowCols, minutes: clinicMinutesNow(profile.timezone) } : null;
 
   return (
     <section>
       <PageHeader
         title="Randevular"
         description={
-          view === "week" ? `${formatLocalDate(from)} – ${formatLocalDate(to)}` : formatLocalDate(date)
+          view === "week"
+            ? `${formatLocalDate(from)} – ${formatLocalDate(to)} · ${items.length} randevu`
+            : `${formatLocalDate(date)} · ${items.length} randevu`
         }
         actions={
-          hasPermission(ctx, "appointment.create") ? (
-            <Link href={`/appointments/new?date=${date >= today ? date : today}`} className="btn">
-              + Yeni randevu
-            </Link>
+          canCreate ? (
+            <Button asChild>
+              <Link href={newHref}>
+                <Plus />
+                Yeni randevu
+              </Link>
+            </Button>
           ) : null
         }
       />
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <div
-          className="inline-flex rounded-lg border border-slate-300 p-0.5 dark:border-slate-700"
-          role="group"
-          aria-label="Görünüm"
-        >
-          {(["day", "week"] as const).map((v) => (
-            <Link
-              key={v}
-              href={qs({ view: v })}
-              aria-current={view === v ? "page" : undefined}
-              className={`inline-flex min-h-10 items-center rounded-md px-4 text-sm font-medium ${
-                view === v
-                  ? "bg-brand-600 text-white"
-                  : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-              }`}
-            >
-              {v === "day" ? "Gün" : "Hafta"}
-            </Link>
-          ))}
-        </div>
-        <Link href={qs({ date: addDays(date, -step) })} className="btn-ghost btn-sm" aria-label="Önceki">
-          ←
-        </Link>
-        <Link href={qs({ date: today })} className="btn-ghost btn-sm">
-          Bugün
-        </Link>
-        <Link href={qs({ date: addDays(date, step) })} className="btn-ghost btn-sm" aria-label="Sonraki">
-          →
-        </Link>
-      </div>
+      <AppointmentsToolbar
+        params={{ view, date, branch: sp.branch, doctor: sp.doctor, status: sp.status }}
+        today={today}
+        weekStart={weekStart}
+        doctors={doctors.map((d) => ({ value: d.id, label: d.displayName }))}
+        branches={branches.map((b) => ({ value: b.id, label: b.name }))}
+        statuses={Object.entries(APPOINTMENT_STATUS).map(([k, v]) => ({ value: k, label: v.label }))}
+      />
 
-      <form className="card mb-6 grid gap-3 sm:grid-cols-2 sm:items-end xl:grid-cols-[160px_minmax(0,1fr)_minmax(0,1fr)_160px_auto]">
-        <input type="hidden" name="view" value={view} />
-        <div>
-          <label htmlFor="f-date" className="label">
-            Tarih
-          </label>
-          <input id="f-date" type="date" name="date" defaultValue={date} className="input" />
-        </div>
-        <div>
-          <label htmlFor="f-branch" className="label">
-            Şube
-          </label>
-          <select id="f-branch" name="branch" defaultValue={sp.branch ?? ""} className="input">
-            <option value="">Tüm şubeler</option>
-            {branches.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label htmlFor="f-doctor" className="label">
-            Doktor
-          </label>
-          <select id="f-doctor" name="doctor" defaultValue={sp.doctor ?? ""} className="input">
-            <option value="">Tüm doktorlar</option>
-            {doctors.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.displayName}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label htmlFor="f-status" className="label">
-            Durum
-          </label>
-          <select id="f-status" name="status" defaultValue={status ?? ""} className="input">
-            <option value="">Tümü</option>
-            {Object.entries(APPOINTMENT_STATUS).map(([k, v]) => (
-              <option key={k} value={k}>
-                {v.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <button type="submit" className="btn-ghost">
-          Filtrele
-        </button>
-      </form>
-
-      {items.length === 0 ? (
-        <EmptyState title="Bu aralıkta randevu yok">
-          {hasPermission(ctx, "appointment.create") ? (
-            <Link
-              href={`/appointments/new?date=${date >= today ? date : today}`}
-              className="font-medium text-brand-700"
-            >
+      {columns.length === 0 ? (
+        <EmptyState title="Bu aralıkta randevu yok" icon="calendar">
+          {canCreate ? (
+            <Link href={newHref} className="font-medium text-brand-700 dark:text-brand-300">
               Randevu oluşturun
             </Link>
           ) : null}
@@ -203,46 +154,52 @@ export default async function AppointmentsPage({ searchParams }: { searchParams:
           items={calItems}
           label={view === "week" ? "Haftalık randevu takvimi" : "Günlük randevu takvimi"}
           showDoctor={view === "week"}
+          now={now}
         />
       )}
 
       {items.length ? (
-        <details className="mt-6" open={tooManyColumns}>
-          <summary className="cursor-pointer text-sm font-medium text-brand-700">
+        <details className="group mt-6" open={tooManyColumns}>
+          <summary className="inline-flex cursor-pointer list-none items-center gap-2 rounded-md text-sm font-medium text-brand-700 hover:underline focus-visible:outline-none focus-visible:shadow-focus dark:text-brand-300 [&::-webkit-details-marker]:hidden">
+            <span className="transition-transform group-open:rotate-90" aria-hidden="true">
+              ›
+            </span>
             Liste görünümü ({items.length})
           </summary>
-          <div className="card mt-3 overflow-x-auto p-0">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th scope="col">Tarih / saat</th>
-                  <th scope="col">Hasta</th>
-                  <th scope="col">Doktor</th>
-                  <th scope="col">Hizmet</th>
-                  <th scope="col">Oda</th>
-                  <th scope="col">Durum</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((a) => (
-                  <tr key={a.id}>
-                    <td className="whitespace-nowrap tabular-nums">
-                      <Link href={`/appointments/${a.id}`} className="font-medium hover:text-brand-700">
-                        {a.localDate.slice(8, 10)}.{a.localDate.slice(5, 7)} {a.localStart}–{a.localEnd}
-                      </Link>
-                    </td>
-                    <td>{a.patient.name}</td>
-                    <td>{a.doctor.name}</td>
-                    <td>{a.service?.name ?? "—"}</td>
-                    <td>{a.room?.name ?? "—"}</td>
-                    <td>
-                      <AppointmentStatusBadge status={a.status} />
-                    </td>
+          <SectionCard title="Randevu listesi" flush className="mt-3 overflow-hidden">
+            <div className="overflow-x-auto border-t border-line dark:border-line-dark">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th scope="col">Tarih / saat</th>
+                    <th scope="col">Hasta</th>
+                    <th scope="col">Doktor</th>
+                    <th scope="col">Hizmet</th>
+                    <th scope="col">Oda</th>
+                    <th scope="col">Durum</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {items.map((a) => (
+                    <tr key={a.id}>
+                      <td className="whitespace-nowrap tabular-nums">
+                        <Link href={`/appointments/${a.id}`} className="font-medium hover:text-brand-700">
+                          {a.localDate.slice(8, 10)}.{a.localDate.slice(5, 7)} {a.localStart}–{a.localEnd}
+                        </Link>
+                      </td>
+                      <td>{a.patient.name}</td>
+                      <td>{a.doctor.name}</td>
+                      <td>{a.service?.name ?? "—"}</td>
+                      <td>{a.room?.name ?? "—"}</td>
+                      <td>
+                        <AppointmentStatusBadge status={a.status} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </SectionCard>
         </details>
       ) : null}
     </section>

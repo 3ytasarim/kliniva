@@ -474,7 +474,7 @@ export function AppointmentBooking({
         </dl>
         <div>
           <label htmlFor="bk-notes" className="label">
-            Operasyon notu (isteğe bağlı)
+            Randevu notu (isteğe bağlı)
           </label>
           <textarea
             id="bk-notes"

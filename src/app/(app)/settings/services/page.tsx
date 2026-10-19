@@ -12,6 +12,8 @@ import {
 import { ActionForm, Field } from "@/components/action-form";
 import { Forbidden } from "@/components/forbidden";
 import { EmptyState, PageHeader, ROOM_TYPE_LABELS, StatusBadge } from "@/components/ui";
+import { formatMoney, minorToInput } from "@/lib/money";
+import { CURRENCIES, type Currency } from "@/types/finance";
 
 export const metadata: Metadata = { title: "Hizmetler" };
 
@@ -27,6 +29,8 @@ function ServiceFields({
     requiresRoom: boolean;
     allowedRoomTypes: string[];
     active: boolean;
+    priceMinor: number | null;
+    currency: Currency;
   };
 }) {
   return (
@@ -44,6 +48,34 @@ function ServiceFields({
         defaultValue={String(s?.defaultDurationMinutes ?? 30)}
         idPrefix={idPrefix}
       />
+      <div className="grid grid-cols-[1fr_6.5rem] gap-2">
+        <Field
+          label="Fiyat"
+          name="price"
+          inputMode="decimal"
+          placeholder="örn. 1.250"
+          hint="Boş bırakılırsa hizmet bedeli otomatik oluşmaz."
+          defaultValue={minorToInput(s?.priceMinor)}
+          idPrefix={idPrefix}
+        />
+        <div>
+          <label htmlFor={`${idPrefix}-currency`} className="label">
+            Para birimi
+          </label>
+          <select
+            id={`${idPrefix}-currency`}
+            name="currency"
+            defaultValue={s?.currency ?? "TRY"}
+            className="input"
+          >
+            {CURRENCIES.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
       <fieldset className="sm:col-span-2">
         <legend className="label">Uygun oda tipleri (boş = tümü)</legend>
         <div className="flex flex-wrap gap-2">
@@ -92,7 +124,7 @@ export default async function ServicesPage({ searchParams }: { searchParams: Pro
     <section className="grid gap-6">
       <PageHeader
         title="Hizmetler"
-        description="Randevu süresi ve oda gereksinimi hizmetten gelir; doktora özel süre tanımlanabilir."
+        description="Randevu süresi, oda gereksinimi ve fiyat hizmetten gelir. Randevu tamamlanınca fiyat hasta hesabına hizmet bedeli olarak yansır."
       />
 
       <div className="card">
@@ -115,6 +147,9 @@ export default async function ServicesPage({ searchParams }: { searchParams: Pro
               <summary className="flex cursor-pointer flex-wrap items-center justify-between gap-2">
                 <span className="font-medium">
                   {s.name} <span className="text-sm text-slate-500">· {s.defaultDurationMinutes} dk</span>
+                  <span className="ml-2 text-sm font-semibold text-brand-700 dark:text-brand-300">
+                    {s.priceMinor !== null ? formatMoney(s.priceMinor, s.currency) : "Fiyat yok"}
+                  </span>
                 </span>
                 <span className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                   {s.requiresRoom

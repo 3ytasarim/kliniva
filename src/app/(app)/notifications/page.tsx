@@ -23,6 +23,7 @@ const FILTERS = [
   { key: "unread", label: "Okunmamış" },
   { key: "appointments", label: "Randevular" },
   { key: "inventory", label: "Stok" },
+  { key: "tasks", label: "Görevler" },
   { key: "security", label: "Güvenlik" },
 ] as const;
 type FilterKey = (typeof FILTERS)[number]["key"];

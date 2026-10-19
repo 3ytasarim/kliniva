@@ -49,7 +49,7 @@ for (const viewport of [
     await page.goto("/appointments");
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Randevular");
     await noOverflow(page, "randevu takvimi");
-    await page.getByRole("link", { name: "+ Yeni randevu" }).click();
+    await page.getByRole("link", { name: "Yeni randevu", exact: true }).click();
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Yeni randevu");
     await noOverflow(page, "yeni randevu");
 
@@ -91,21 +91,27 @@ for (const viewport of [
     for (const [button, status] of [
       ["Onayla", "Onaylandı"],
       ["Hasta geldi (check-in)", "Geldi"],
-      ["Başlat", "İşlemde"],
+      ["Başlat", "Muayenede"],
       ["Tamamla", "Tamamlandı"],
     ] as const) {
       await page.getByRole("button", { name: button, exact: true }).click();
       await expect(page.getByText(status, { exact: true }).first()).toBeVisible({ timeout: 20_000 });
     }
     await expect(page.getByRole("button", { name: "Tamamla", exact: true })).toHaveCount(0);
-    await expect(page.getByText("Muayene / işlem başladı")).toBeVisible();
+    await expect(page.getByText("Muayene başladı")).toBeVisible();
 
     // Takvimde (gün görünümü) görünür
     await page.goto(`/appointments?view=day&date=${tomorrowIstanbul()}`);
-    const card = page.getByRole("grid", { name: "Günlük randevu takvimi" }).getByRole("link", {
+    // Takvim kartı: tıklayınca ayrıntı + hızlı işlemler (tamamlanmış randevuda işlem düğmesi yok) + "Detayı aç"
+    const card = page.getByRole("grid", { name: "Günlük randevu takvimi" }).getByRole("button", {
       name: new RegExp(`${fullFirst} ${E2E_SURNAME}`),
     });
     await expect(card).toBeVisible();
+    await card.click();
+    const detail = page.getByRole("dialog").getByRole("link", { name: "Detayı aç" });
+    await expect(detail).toBeVisible();
+    await expect(page.getByRole("dialog").getByRole("button", { name: "Muayeneyi başlat" })).toHaveCount(0);
+    await page.keyboard.press("Escape");
     await noOverflow(page, "gün görünümü");
     await page.goto(`/appointments?view=week&date=${tomorrowIstanbul()}`);
     await expect(page.getByRole("grid", { name: "Haftalık randevu takvimi" })).toBeVisible();
@@ -128,6 +134,10 @@ for (const viewport of [
     // Panel kartları
     await page.goto("/dashboard");
     await expect(page.getByText("Bugünkü randevular")).toBeVisible();
+    // Eğilim grafiği yalnızca istemcide çizilir (SVG akış parçası CSP ihlali üretmesin) — görünür olmalı
+    await expect(page.getByRole("img", { name: "Son 14 günün randevu eğilimi" })).toBeVisible({
+      timeout: 10_000,
+    });
     await noOverflow(page, "panel");
 
     await page.waitForLoadState("networkidle");

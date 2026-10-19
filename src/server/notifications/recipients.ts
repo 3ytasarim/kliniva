@@ -25,6 +25,8 @@ export type RecipientInput = {
   doctorId?: string | null;
   createdByUserId?: string | null;
   actorUserId?: string | null;
+  /** Doğrudan alıcılar (ör. görevin atandığı kişi). */
+  userIds?: string[];
 };
 
 const INVENTORY_ALERT_ROLES = ["INVENTORY_MANAGER", "CLINIC_ADMIN", "CLINIC_OWNER"];
@@ -116,6 +118,10 @@ export async function resolveNotificationRecipients(
     case "DOCUMENT_INTEGRITY_FAILED":
     case "SYSTEM_SECURITY_ALERT":
       ids = await usersWithRoles(scope, ADMIN_ROLES);
+      break;
+    case "TASK_ASSIGNED":
+      // Kendine görev atayan kişi bildirim almaz.
+      ids = (await activeUsers(scope, input.userIds ?? [])).filter((id) => id !== input.actorUserId);
       break;
   }
   const isAppointmentEvent = input.type.startsWith("APPOINTMENT_") || input.type === "PATIENT_CHECKED_IN";

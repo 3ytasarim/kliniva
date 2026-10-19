@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   branches,
@@ -24,6 +24,8 @@ import { doctorDisplayName, loadVisibleDoctor } from "@/server/services/doctors"
 import { PG_UNIQUE_VIOLATION, pgErrorInfo } from "@/server/db/pg-errors";
 import { ROOM_TYPES } from "@/server/services/org";
 import { uuidSchema } from "@/server/validation";
+import { parseMoneyInput } from "@/lib/money";
+import { CURRENCIES, type Currency } from "@/types/finance";
 
 /**
  * Klinik hizmetleri (işlem tipleri) ve doktor ↔ hizmet eşleşmesi.
@@ -45,6 +47,15 @@ export const serviceInputSchema = z.object({
     (v) => (v === undefined ? true : v === true || v === "on" || v === "true"),
     z.boolean(),
   ),
+  /** Sprint 8: liste fiyatı ("1.250,50" gibi). Boş → fiyatsız. */
+  price: z.preprocess(
+    (v) =>
+      v === undefined || v === null || (typeof v === "string" && v.trim() === "")
+        ? null
+        : (parseMoneyInput(v) ?? Number.NaN),
+    z.number({ message: "Geçerli bir fiyat girin." }).int().min(0).max(1_000_000_000).nullable(),
+  ),
+  currency: z.preprocess((v) => (v === undefined || v === "" ? "TRY" : v), z.enum(CURRENCIES)),
 });
 
 export const doctorServicesSchema = z.object({
@@ -81,6 +92,8 @@ export type ClinicalServiceItem = {
   requiresRoom: boolean;
   allowedRoomTypes: string[];
   active: boolean;
+  priceMinor: number | null;
+  currency: Currency;
 };
 
 const serviceColumns = {
@@ -92,6 +105,8 @@ const serviceColumns = {
   requiresRoom: clinicalServices.requiresRoom,
   allowedRoomTypes: clinicalServices.allowedRoomTypes,
   active: clinicalServices.active,
+  priceMinor: clinicalServices.priceMinor,
+  currency: sql<Currency>`${clinicalServices.currency}`,
 };
 
 export async function listClinicalServices(
@@ -126,6 +141,8 @@ export async function createClinicalService(ctx: AuthContext, input: unknown): P
         requiresRoom: data.requiresRoom,
         allowedRoomTypes: data.allowedRoomTypes.length ? data.allowedRoomTypes : null,
         active: data.active,
+        priceMinor: data.price,
+        currency: data.currency,
       })
       .returning({ id: clinicalServices.id })
       .catch(mapUnique);
@@ -133,7 +150,12 @@ export async function createClinicalService(ctx: AuthContext, input: unknown): P
       action: "CLINICAL_SERVICE_CREATED",
       entityType: "clinical_service",
       entityId: row!.id,
-      metadata: { durationMinutes: data.defaultDurationMinutes, requiresRoom: data.requiresRoom },
+      metadata: {
+        durationMinutes: data.defaultDurationMinutes,
+        requiresRoom: data.requiresRoom,
+        priceMinor: data.price,
+        currency: data.currency,
+      },
     });
     return { id: row!.id };
   });
@@ -154,6 +176,8 @@ export async function updateClinicalService(ctx: AuthContext, rawId: unknown, in
         requiresRoom: data.requiresRoom,
         allowedRoomTypes: data.allowedRoomTypes.length ? data.allowedRoomTypes : null,
         active: data.active,
+        priceMinor: data.price,
+        currency: data.currency,
         updatedAt: new Date(),
       })
       .where(tenantWhere(clinicalServices, scope, eq(clinicalServices.id, id)))
@@ -164,7 +188,12 @@ export async function updateClinicalService(ctx: AuthContext, rawId: unknown, in
       action: "CLINICAL_SERVICE_UPDATED",
       entityType: "clinical_service",
       entityId: id,
-      metadata: { active: data.active, durationMinutes: data.defaultDurationMinutes },
+      metadata: {
+        active: data.active,
+        durationMinutes: data.defaultDurationMinutes,
+        priceMinor: data.price,
+        currency: data.currency,
+      },
     });
   });
 }

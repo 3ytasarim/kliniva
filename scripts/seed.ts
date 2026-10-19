@@ -169,6 +169,7 @@ async function main() {
       {
         name: "Muayene",
         code: "MUA",
+        priceMinor: 2_500_00,
         defaultDurationMinutes: 30,
         requiresRoom: true,
         allowedRoomTypes: ["EXAMINATION" as const],
@@ -176,6 +177,7 @@ async function main() {
       {
         name: "PRP",
         code: "PRP",
+        priceMinor: 6_000_00,
         defaultDurationMinutes: 45,
         requiresRoom: true,
         allowedRoomTypes: ["PROCEDURE" as const],
@@ -183,6 +185,7 @@ async function main() {
       {
         name: "Lazer",
         code: "LZR",
+        priceMinor: 5_500_00,
         defaultDurationMinutes: 60,
         requiresRoom: true,
         allowedRoomTypes: ["LASER" as const],
@@ -190,6 +193,7 @@ async function main() {
       {
         name: "Danışma",
         code: "DAN",
+        priceMinor: 1_250_00,
         defaultDurationMinutes: 30,
         requiresRoom: false,
         allowedRoomTypes: null,
@@ -203,7 +207,65 @@ async function main() {
       if (!found) {
         await tx.insert(schema.clinicalServices).values({ ...s, tenantId });
         console.log(`✓ Hizmet eklendi: ${s.name}`);
+      } else {
+        // Sprint 8: fiyatı hiç girilmemiş demo hizmete örnek fiyat (kullanıcının girdiği fiyat EZİLMEZ).
+        await tx
+          .update(schema.clinicalServices)
+          .set({ priceMinor: s.priceMinor })
+          .where(and(eq(schema.clinicalServices.id, found.id), isNull(schema.clinicalServices.priceMinor)));
       }
+    }
+    // Sprint 8: varsayılan kasa kategorileri (idempotent; mevcutlar korunur)
+    const cashCats = [
+      ["Kira", "EXPENSE"],
+      ["Personel", "EXPENSE"],
+      ["Faturalar", "EXPENSE"],
+      ["Malzeme ve sarf", "EXPENSE"],
+      ["Reklam ve pazarlama", "EXPENSE"],
+      ["Diğer gelir", "INCOME"],
+    ] as const;
+    for (const [name, kind] of cashCats) {
+      await tx.insert(schema.cashCategories).values({ tenantId, name, kind }).onConflictDoNothing();
+    }
+    // Sprint 8.1: varsayılan hasta kaynakları + örnek özel sigortalar (idempotent)
+    const lookups: [string, "SOURCE" | "INSURER"][] = [
+      ...["Google", "Instagram", "Tavsiye / Referans", "Web sitesi", "Sağlık turizmi acentesi", "Diğer"].map(
+        (n) => [n, "SOURCE"] as [string, "SOURCE"],
+      ),
+      ...["Allianz Sigorta", "Anadolu Sigorta", "Axa Sigorta"].map(
+        (n) => [n, "INSURER"] as [string, "INSURER"],
+      ),
+    ];
+    for (const [name, kind] of lookups) {
+      await tx.insert(schema.patientLookups).values({ tenantId, name, kind }).onConflictDoNothing();
+    }
+    // Sprint 8.4: örnek tahlil tipleri (idempotent; mevcut tip değiştirilmez)
+    const { parseParametersText } = await import("@/server/services/labs");
+    const panels: [string, string[]][] = [
+      [
+        "Hemogram",
+        [
+          "Hemoglobin | g/dL | 12 | 16",
+          "Lökosit (WBC) | 10³/µL | 4 | 10",
+          "Trombosit | 10³/µL | 150 | 400",
+          "Hematokrit | % | 36 | 46",
+        ],
+      ],
+      [
+        "Saç dökülmesi paneli",
+        [
+          "Ferritin | ng/mL | 30 | 400",
+          "B12 vitamini | pg/mL | 200 | 900",
+          "D vitamini | ng/mL | 30 | 100",
+          "TSH | mIU/L | 0,4 | 4",
+        ],
+      ],
+    ];
+    for (const [name, lines] of panels) {
+      await tx
+        .insert(schema.labPanels)
+        .values({ tenantId, name, parameters: parseParametersText(lines.join(String.fromCharCode(10))) })
+        .onConflictDoNothing();
     }
     const doctorEmail = normalizeEmail(`doktor@${slug}.demo`);
     let [docUser] = await tx

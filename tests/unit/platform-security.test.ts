@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { buildCsp, staticSecurityHeaders } from "@/lib/security-headers";
 import { isSameOriginRequest } from "@/server/security/origin";
@@ -98,7 +98,9 @@ describe("Ortam değişkenleri / sırlar", () => {
       encoding: "utf8",
     })
       .split("\n")
-      .filter((f) => /\.(ts|tsx|mts|mjs|js|json|md|sql)$/.test(f) && !f.startsWith("tests/unit/logging"));
+      .filter((f) => /\.(ts|tsx|mts|mjs|js|json|md|sql)$/.test(f) && !f.startsWith("tests/unit/logging"))
+      // İndekste olup çalışma ağacından silinmiş / taşınmış dosya içerik taşımaz (commit ile indeksten de çıkar).
+      .filter((f) => existsSync(f));
     for (const f of files) {
       const content = readFileSync(f, "utf8");
       expect(content, f).not.toMatch(/postgres(ql)?:\/\/[^\s"'`]+:[^\s"'`@]+@/);

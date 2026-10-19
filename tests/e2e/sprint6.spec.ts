@@ -13,7 +13,7 @@ import {
 } from "./support/helpers";
 
 /**
- * Sprint 6 E2E — bildirim merkezi, SSE gerçek zamanlı akış, doktor onayı, stok uyarısı, Bugünkü operasyon.
+ * Sprint 6 E2E — bildirim merkezi, SSE gerçek zamanlı akış, doktor onayı, stok uyarısı, Bugünkü muayeneler.
  * İki (veya üç) ayrı tarayıcı bağlamı: resepsiyon + doktor (+ sahip). Doktor sayfası YENİLENMEDEN bildirim alır
  * (SSE). Konsol hatası / CSP ihlali / yatay taşma yok. Veriler test sonunda temizlenir (E2E-* / E2E hastaları).
  */
@@ -246,7 +246,7 @@ test("stok uyarısı: asgari 5, stok 6, kullanım 2 → 4 → sahip zilinde 'Dü
   for (const [button, status] of [
     ["Onayla", "Onaylandı"],
     ["Hasta geldi (check-in)", "Geldi"],
-    ["Başlat", "İşlemde"],
+    ["Başlat", "Muayenede"],
   ] as const) {
     await page.goto(url);
     await page.getByRole("button", { name: button, exact: true }).click();
@@ -254,6 +254,10 @@ test("stok uyarısı: asgari 5, stok 6, kullanım 2 → 4 → sahip zilinde 'Dü
   }
   await submit(page, "Malzeme kullanımı ekle").click();
   await expect(page).toHaveURL(/\/inventory\/usages\/[0-9a-f-]{36}$/, { timeout: 20_000 });
+  // Seçenekler render edilmeden okunursa form ilk seçenekle (başka ürün) gönderilir.
+  await expect(page.locator("#ua-inventoryItemId option").filter({ hasText: itemName })).toHaveCount(1, {
+    timeout: 15_000,
+  });
   const opt = (await page.locator("#ua-inventoryItemId option").allTextContents()).find((l) =>
     l.startsWith(itemName),
   )!;
@@ -277,7 +281,7 @@ test("stok uyarısı: asgari 5, stok 6, kullanım 2 → 4 → sahip zilinde 'Dü
   expect(problems).toEqual([]);
 });
 
-test("Bugünkü operasyon: check-in → doktor gerçek zamanlı bildirim → Başlat → Tamamla; panolar güncellenir", async ({
+test("Bugünkü muayeneler: check-in → doktor gerçek zamanlı bildirim → Başlat → Tamamla; panolar güncellenir", async ({
   browser,
 }) => {
   test.skip(!EMAIL || !PASSWORD, "seed kimlik bilgileri yok");
@@ -292,7 +296,7 @@ test("Bugünkü operasyon: check-in → doktor gerçek zamanlı bildirim → Ba�
     await clearUnread(doc.page);
 
     await rec.page.goto("/operations/today");
-    await expect(rec.page.getByRole("heading", { level: 1 })).toHaveText("Bugünkü operasyon");
+    await expect(rec.page.getByRole("heading", { level: 1 })).toHaveText("Bugünkü muayeneler");
     const expected = rec.page
       .getByTestId("ops-group-expected")
       .getByTestId("ops-row")

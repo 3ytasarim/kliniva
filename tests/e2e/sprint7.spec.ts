@@ -11,9 +11,9 @@ import {
 } from "./support/helpers";
 
 /**
- * Sprint 7 E2E — Kliniva AI sesli asistan (SAHTE taşıyıcı: VOICE_TRANSPORT=mock; OpenAI'ye ağ çağrısı yok, mikrofon
- * istenmez). Panel aynı sunucu araçlarını / onay akışını kullanır; komut metinle verilir.
- *  - Doktor: "Bugünkü randevularımı söyle" → araç kartı + yanıt
+ * Sprint 7 E2E — Kliniva AI asistan paneli (SAHTE taşıyıcı: VOICE_TRANSPORT=mock; OpenAI'ye ağ çağrısı yok, mikrofon
+ * istenmez). Yazışma ve Sesli sekmeleri aynı sunucu araçlarını / onay akışını kullanır.
+ *  - Doktor (Sesli sekme, test modu): "Bugünkü randevularımı söyle" → araç kartı + yanıt; kapatınca döküm silinir
  *  - Resepsiyon: müsaitlik → randevu özeti (ölçülü gizlilik) → "Evet" ×2 → TEK randevu; takvimde görünür;
  *    doktora bildirim (SSE)
  *  - Çakışma: aynı saat başka hasta → "Bu saat artık müsait değil" + alternatif saatler
@@ -46,11 +46,29 @@ async function newPage(browser: Browser, who: "owner" | "reception" | "doctor", 
   return { page, problems, close: () => ctx.close() };
 }
 
-const panel = (page: Page) => page.getByRole("region", { name: "Kliniva AI sesli asistan" });
+const panel = (page: Page) => page.getByRole("region", { name: "Kliniva AI asistanı" });
 const transcript = (page: Page) => page.getByTestId("voice-transcript");
+const chatLog = (page: Page) => page.getByTestId("chat-transcript");
+
+async function openPanel(page: Page) {
+  await page.getByRole("button", { name: "Kliniva AI asistanını aç" }).click();
+  await expect(panel(page)).toBeVisible();
+}
+
+/** Yazışma sekmesi (varsayılan): mesaj → kullanıcı satırı + asistan yanıtı. */
+async function chat(page: Page, text: string): Promise<string> {
+  const lines = chatLog(page).getByTestId("chat-line");
+  const before = await lines.count();
+  await page.locator("#assistant-input").fill(text);
+  await panel(page).getByRole("button", { name: "Gönder" }).click();
+  await expect(lines).toHaveCount(before + 2, { timeout: 20_000 });
+  const last = lines.last().getByTestId("chat-text");
+  return (await last.innerText()).trim();
+}
 
 async function openVoice(page: Page) {
-  await page.getByRole("button", { name: "Kliniva AI sesli asistanı aç" }).click();
+  await openPanel(page);
+  await panel(page).getByRole("tab", { name: /Sesli/ }).click();
   await panel(page).getByRole("button", { name: "Başlat" }).click();
   await expect(page.getByTestId("voice-status")).toContainText("Dinliyor", { timeout: 15_000 });
   await expect(transcript(page)).toContainText("Test modu");
@@ -98,7 +116,7 @@ test("doktor: 'Bugünkü randevularımı söyle' → araç kartı ve sistemden g
   }
 });
 
-test("resepsiyon: müsaitlik → özet (ölçülü) → 'Evet' ×2 → TEK randevu; takvim + doktor bildirimi; çakışma", async ({
+test("resepsiyon (Yazışma): müsaitlik → özet (ölçülü) → 'olabilir' yürütmez → 'Evet' ×2 → TEK randevu; takvim + doktor bildirimi; çakışma", async ({
   browser,
 }) => {
   test.skip(!EMAIL || !PASSWORD, "seed kimlik bilgileri yok");
@@ -117,35 +135,40 @@ test("resepsiyon: müsaitlik → özet (ölçülü) → 'Evet' ×2 → TEK rande
     const date = istanbulDate(3);
 
     await rec.page.goto("/dashboard");
-    await openVoice(rec.page);
-    const avail = await ask(rec.page, `Dr. Demo Doktor ${date} müsait mi?`);
+    await openPanel(rec.page);
+    const avail = await chat(rec.page, `Dr. Demo Doktor ${date} müsait mi?`);
     const time = /(\d{2}:\d{2})/.exec(avail)?.[1];
     expect(time, avail).toBeTruthy();
 
-    const summary = await ask(
+    const summary = await chat(
       rec.page,
       `Dr. Demo Doktor ${date} ${time} ${first} için Muayene randevusu oluştur`,
     );
     expect(summary).toMatch(/Onaylıyor musunuz\?$/);
-    const card = rec.page.getByTestId("voice-confirm-card");
+    const card = rec.page.getByTestId("chat-confirm-card");
     await expect(card).toBeVisible();
     // Ölçülü gizlilik: soyadı kısaltılır; telefon / tam soyadı asistan çıktısında yok
     await expect(card).toContainText(`${first} E.`);
     await expect(card).not.toContainText(E2E_SURNAME);
-    expect(await transcript(rec.page).innerText()).not.toContain(phone.slice(-7));
+    expect(await chatLog(rec.page).innerText()).not.toContain(phone.slice(-7));
+    await expect(chatLog(rec.page).getByTestId("chat-tool").first()).toBeVisible();
 
-    expect(await ask(rec.page, "Evet")).toBe("Randevu oluşturuldu.");
+    // Belirsiz yanıt onay değildir; açık "Evet" → tek işlem; tekrar "Evet" → yinelenmez
+    expect(await chat(rec.page, "olabilir")).not.toBe("Randevu oluşturuldu.");
+    await expect(card).toBeVisible();
+    expect(await chat(rec.page, "Evet")).toBe("Randevu oluşturuldu.");
     await expect(card).toHaveCount(0);
-    expect(await ask(rec.page, "Evet")).toMatch(/zaten/);
+    expect(await chat(rec.page, "Evet")).toMatch(/zaten/);
 
     // Çakışma: aynı saat, başka hasta
-    const conflict = await ask(
+    const conflict = await chat(
       rec.page,
       `Dr. Demo Doktor ${date} ${time} ${other} için Muayene randevusu oluştur`,
     );
     expect(conflict).toMatch(/^Bu saat artık müsait değil\. Müsait saatler: \d{2}:\d{2}/);
-    await noOverflow(rec.page, "sesli asistan (resepsiyon)");
-    await closeVoice(rec.page);
+    await noOverflow(rec.page, "asistan paneli (resepsiyon)");
+    await panel(rec.page).getByRole("button", { name: "Yeni sohbet" }).click();
+    await expect(chatLog(rec.page).getByTestId("chat-line")).toHaveCount(0);
 
     // Takvimde TEK randevu
     await rec.page.goto(`/appointments?date=${date}`);

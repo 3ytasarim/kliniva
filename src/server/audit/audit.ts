@@ -22,6 +22,29 @@ export type AuditAction =
   | "ACCESS_DENIED"
   | "PATIENT_VIEWED"
   | "PATIENT_HEALTH_VIEWED"
+  | "CLINICAL_NOTE_SAVED"
+  | "CLINICAL_NOTE_VIEWED"
+  | "CLINICAL_ATTACHMENT_ADDED"
+  | "CLINICAL_ATTACHMENT_VIEWED"
+  | "CLINICAL_ATTACHMENT_VOIDED"
+  | "PATIENT_CHARGE_CREATED"
+  | "PATIENT_LOOKUP_CREATED"
+  | "PATIENT_LOOKUP_UPDATED"
+  | "PATIENT_HEALTH_PROFILE_UPDATED"
+  | "PATIENT_TASK_CREATED"
+  | "PATIENT_TASK_UPDATED"
+  | "PATIENT_TASK_CLOSED"
+  | "LAB_PANEL_CREATED"
+  | "LAB_PANEL_UPDATED"
+  | "LAB_RESULT_ADDED"
+  | "LAB_RESULT_VOIDED"
+  | "LAB_RESULTS_VIEWED"
+  | "PATIENT_CHARGE_VOIDED"
+  | "PAYMENT_RECORDED"
+  | "CASH_ENTRY_CREATED"
+  | "CASH_ENTRY_VOIDED"
+  | "CASH_CATEGORY_CREATED"
+  | "CASH_CATEGORY_UPDATED"
   | "PATIENT_CREATED"
   | "PATIENT_UPDATED"
   | "PATIENT_DOCUMENT_GENERATED"
@@ -122,7 +145,7 @@ export type AuditAction =
   | "EXPIRY_NOTIFICATION_CREATED"
   | "LOT_RECALL_NOTIFICATION_CREATED";
 
-export type AuditSource = "USER" | "SYSTEM" | "AI_VOICE" | "API";
+export type AuditSource = "USER" | "SYSTEM" | "AI_VOICE" | "API" | "AI_CHAT";
 
 /** Yalnızca kısa yapısal değerler: bayrak, sayı, kod/UUID. Serbest metin (isim, not) kabul edilmez. */
 export type AuditMetadata = Record<string, string | number | boolean | null>;

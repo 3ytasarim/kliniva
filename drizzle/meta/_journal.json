@@ -127,6 +127,104 @@
       "when": 1792095962674,
       "tag": "0017_voice_security",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792110285332,
+      "tag": "0018_chat_assistant",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792110298642,
+      "tag": "0019_chat_security",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1792156444916,
+      "tag": "0020_clinical_notes",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1792156457201,
+      "tag": "0021_clinical_notes_security",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1792336749384,
+      "tag": "0022_finance",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792336763227,
+      "tag": "0023_finance_security",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792343307353,
+      "tag": "0024_patient_card",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1792343325406,
+      "tag": "0025_patient_card_security",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1792346637198,
+      "tag": "0026_clinical_attachments",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1792346664485,
+      "tag": "0027_clinical_attachments_security",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1792357603705,
+      "tag": "0028_patient_tasks",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1792357622253,
+      "tag": "0029_patient_tasks_security",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1792361548539,
+      "tag": "0030_lab_results",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1792361552700,
+      "tag": "0031_lab_results_security",
+      "breakpoints": true
     }
   ]
 }

@@ -307,7 +307,7 @@ const branchSummaryTool: ToolDef = {
   name: "voice_get_branch_summary",
   kind: "READ",
   description:
-    "Bugünkü operasyon sayıları (toplam, bekleyen, giriş yapmış, işlemde, tamamlanan, gelmeyen, iptal).",
+    "Bugünkü muayene sayıları (toplam, bekleyen, giriş yapmış, muayenede, tamamlanan, gelmeyen, iptal).",
   schema: z.object({ branchId: optId }),
   run: async (tc, a: { branchId?: string }) => {
     const s = await getAppointmentStats(tc.ctx, { branchId: a.branchId });

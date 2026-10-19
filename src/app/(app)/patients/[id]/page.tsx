@@ -10,12 +10,22 @@ import { revokeConsentAction, voidDocumentAction } from "@/app/actions/patients"
 import { listPatientAppointments } from "@/server/services/appointments";
 import { listPatientMaterialUsage } from "@/server/services/material-usage";
 import { MaterialUsageList } from "@/components/material-usage-list";
+import { PatientAccountPanel } from "@/components/patient-account";
+import { NewTaskForm, TaskList } from "@/components/patient-tasks";
+import { LabEntry, LabResultList, LabTrends } from "@/components/lab-results";
+import { listLabPanels, listLabResults } from "@/server/services/labs";
+import { listAssignableUsers, listTasks } from "@/server/services/tasks";
+import { clinicToday } from "@/server/services/appointments";
+import { SectionCard } from "@/components/ui";
+import { AllergyAlert, HealthProfileCard } from "@/components/health-profile";
+import { SOCIAL_SECURITY_OPTIONS } from "@/types/patients";
+import { getPatientAccount, listBillableServices } from "@/server/services/billing";
 import { AppointmentStatusBadge, formatLocalDate } from "@/components/appointment-ui";
 import type { AppointmentListItem } from "@/server/services/appointments";
 import { ActionForm, Field, SelectField } from "@/components/action-form";
 import { Forbidden } from "@/components/forbidden";
 import { NewDocumentButton } from "@/components/new-document-button";
-import { EmptyState, PageHeader, StatusBadge } from "@/components/ui";
+import { Avatar, EmptyState, StatusBadge } from "@/components/ui";
 import {
   AUDIT_ACTION_LABELS,
   CONSENT_LABELS,
@@ -30,7 +40,8 @@ import {
 
 export const metadata: Metadata = { title: "Hasta" };
 
-type Tab = "overview" | "appointments" | "materials" | "documents" | "activity";
+type Tab =
+  "overview" | "appointments" | "tasks" | "labs" | "account" | "materials" | "documents" | "activity";
 
 const REVOKE_CHANNELS = [
   { value: "IN_PERSON", label: "Yüz yüze" },
@@ -50,7 +61,7 @@ export default async function PatientPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; panel?: string }>;
 }) {
   const ctx = await requireUser();
   if (!hasPermission(ctx, "patient.read")) return <Forbidden />;
@@ -69,20 +80,32 @@ export default async function PatientPage({
   const canActivity = hasPermission(ctx, "audit.read");
   const canAppts = hasPermission(ctx, "appointment.read") || hasPermission(ctx, "appointment.read.own");
   const canMaterials = hasPermission(ctx, "inventory.usage.read");
+  const canAccount = hasPermission(ctx, "billing.read");
+  const canTasks = hasPermission(ctx, "task.read");
+  const canLabs = hasPermission(ctx, "patient.health.read");
   const tab: Tab =
-    sp.tab === "documents" && canDocs
-      ? "documents"
-      : sp.tab === "activity" && canActivity
-        ? "activity"
-        : sp.tab === "appointments" && canAppts
-          ? "appointments"
-          : sp.tab === "materials" && canMaterials
-            ? "materials"
-            : "overview";
+    sp.tab === "labs" && canLabs
+      ? "labs"
+      : sp.tab === "tasks" && canTasks
+        ? "tasks"
+        : sp.tab === "account" && canAccount
+          ? "account"
+          : sp.tab === "documents" && canDocs
+            ? "documents"
+            : sp.tab === "activity" && canActivity
+              ? "activity"
+              : sp.tab === "appointments" && canAppts
+                ? "appointments"
+                : sp.tab === "materials" && canMaterials
+                  ? "materials"
+                  : "overview";
 
   const tabs: { key: Tab; label: string; show: boolean; soon?: boolean }[] = [
     { key: "overview", label: "Genel bakış", show: true },
     { key: "appointments", label: "Randevular", show: canAppts },
+    { key: "tasks", label: "Görevler", show: canTasks },
+    { key: "labs", label: "Tahliller", show: canLabs },
+    { key: "account", label: "Hesap", show: canAccount },
     { key: "materials", label: "Malzemeler", show: canMaterials },
     { key: "documents", label: "Belgeler", show: canDocs },
     { key: "activity", label: "Aktivite", show: canActivity },
@@ -90,62 +113,88 @@ export default async function PatientPage({
 
   return (
     <section>
-      <PageHeader
-        title={`${patient.firstName} ${patient.lastName}`}
-        description={`Hasta no ${patient.patientNumber}${patient.primaryBranchName ? ` · ${patient.primaryBranchName}` : ""}`}
-        back={{ href: "/patients", label: "Hastalar" }}
-        actions={
-          <>
-            <PrivacyBadge status={patient.privacyStatus} />
-            <StatusBadge active={patient.active} />
+      <Link
+        href="/patients"
+        className="mb-3 inline-flex items-center gap-1 rounded-md text-[13px] font-medium text-slate-500 transition-colors hover:text-brand-700 focus-visible:outline-none focus-visible:shadow-focus dark:text-slate-400 dark:hover:text-brand-300"
+      >
+        <span aria-hidden="true">←</span> Hastalar
+      </Link>
+      <div className="card mb-6 overflow-hidden p-0">
+        <div className="flex flex-wrap items-center gap-4 px-5 py-5">
+          <Avatar name={`${patient.firstName} ${patient.lastName}`} size="lg" />
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-2xl font-semibold tracking-tight">
+              {patient.firstName} {patient.lastName}
+            </h1>
+            <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-500 dark:text-slate-400">
+              <span className="font-mono text-xs">Hasta no {patient.patientNumber}</span>
+              {patient.primaryBranchName ? <span>· {patient.primaryBranchName}</span> : null}
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <PrivacyBadge status={patient.privacyStatus} />
+              <StatusBadge active={patient.active} />
+              {patient.sourceName ? <span className="badge badge-gray">{patient.sourceName}</span> : null}
+              {patient.health?.profile?.allergies ? (
+                <AllergyAlert allergies={patient.health.profile.allergies} compact />
+              ) : null}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {hasPermission(ctx, "appointment.create") ? (
+              <Link href={`/appointments/new?patient=${patient.id}`} className="btn-ghost btn-sm">
+                Randevu ver
+              </Link>
+            ) : null}
             {hasPermission(ctx, "patient.update") ? (
-              <Link href={`/patients/${patient.id}/edit`} className="btn-ghost btn-sm">
+              <Link href={`/patients/${patient.id}/edit`} className="btn btn-sm">
                 Düzenle
               </Link>
             ) : null}
-          </>
-        }
-      />
-
-      <nav
-        aria-label="Hasta sekmeleri"
-        className="mb-6 flex gap-1 overflow-x-auto border-b border-slate-200 dark:border-slate-800"
-      >
-        {tabs
-          .filter((t) => t.show)
-          .map((t) =>
-            t.soon ? (
-              <span
-                key={t.key}
-                aria-disabled="true"
-                className="flex min-h-11 shrink-0 items-center gap-2 px-4 text-sm text-slate-400"
-              >
-                {t.label} <span className="badge badge-gray">Yakında</span>
-              </span>
-            ) : (
-              <Link
-                key={t.key}
-                href={
-                  t.key === "overview" ? `/patients/${patient.id}` : `/patients/${patient.id}?tab=${t.key}`
-                }
-                aria-current={tab === t.key ? "page" : undefined}
-                className={`flex min-h-11 shrink-0 items-center border-b-2 px-4 text-sm font-medium ${
-                  tab === t.key
-                    ? "border-brand-600 text-brand-700 dark:text-brand-100"
-                    : "border-transparent text-slate-600 hover:text-brand-700 dark:text-slate-400"
-                }`}
-              >
-                {t.label}
-              </Link>
-            ),
-          )}
-      </nav>
+          </div>
+        </div>
+        <nav
+          aria-label="Hasta sekmeleri"
+          className="flex gap-1 overflow-x-auto border-t border-line px-3 dark:border-line-dark"
+        >
+          {tabs
+            .filter((t) => t.show)
+            .map((t) =>
+              t.soon ? (
+                <span
+                  key={t.key}
+                  aria-disabled="true"
+                  className="flex min-h-11 shrink-0 items-center gap-2 px-3 text-sm text-slate-400"
+                >
+                  {t.label} <span className="badge badge-gray">Yakında</span>
+                </span>
+              ) : (
+                <Link
+                  key={t.key}
+                  href={
+                    t.key === "overview" ? `/patients/${patient.id}` : `/patients/${patient.id}?tab=${t.key}`
+                  }
+                  aria-current={tab === t.key ? "page" : undefined}
+                  className={`relative flex min-h-11 shrink-0 items-center px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:shadow-focus ${
+                    tab === t.key
+                      ? "text-brand-700 after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-brand-600 after:content-[''] dark:text-brand-300"
+                      : "text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+                  }`}
+                >
+                  {t.label}
+                </Link>
+              ),
+            )}
+        </nav>
+      </div>
 
       {tab === "overview" ? <Overview ctx={ctx} patient={patient} canDocs={canDocs} /> : null}
       {tab === "documents" ? <Documents ctx={ctx} patientId={patient.id} /> : null}
       {tab === "activity" ? <Activity ctx={ctx} patientId={patient.id} /> : null}
       {tab === "appointments" ? <Appointments ctx={ctx} patientId={patient.id} /> : null}
       {tab === "materials" ? <Materials ctx={ctx} patientId={patient.id} /> : null}
+      {tab === "account" ? <Account ctx={ctx} patientId={patient.id} /> : null}
+      {tab === "tasks" ? <Tasks ctx={ctx} patientId={patient.id} /> : null}
+      {tab === "labs" ? <Labs ctx={ctx} patientId={patient.id} panelId={sp.panel} /> : null}
     </section>
   );
 }
@@ -186,58 +235,90 @@ async function Overview({ ctx, patient: p, canDocs }: { ctx: Ctx; patient: Patie
           <Info label="Şubeler" value={p.branches.map((b) => b.name).join(", ")} />
           <Info label="Kayıt tarihi" value={formatDateTime(p.createdAt)} />
         </dl>
+        <h2 className="mb-4 mt-6 border-t border-line pt-5 font-semibold dark:border-line-dark">
+          Kaynak ve sigorta
+        </h2>
+        <dl className="grid gap-4 sm:grid-cols-2">
+          <Info label="Hasta kaynağı" value={p.sourceName} />
+          <Info label="Yönlendiren" value={p.referral} />
+          <Info
+            label="Sosyal güvence"
+            value={SOCIAL_SECURITY_OPTIONS.find((o) => o.value === p.socialSecurity)?.label}
+          />
+          <Info label="Özel sigorta" value={p.insurerName} />
+          <Info
+            label="SMS"
+            value={
+              p.smsAllowed ? (
+                <span className="badge badge-green">Gönderilebilir</span>
+              ) : (
+                <span className="badge badge-gray">İzin yok</span>
+              )
+            }
+          />
+        </dl>
       </div>
 
-      {canDocs ? (
-        <div className="card">
-          <h2 className="mb-1 font-semibold">İletişim izinleri</h2>
-          <p className="hint mb-4">Sorulmamış izin hiçbir zaman onay sayılmaz.</p>
-          {consents.length === 0 ? (
-            <p className="text-sm text-slate-500">Henüz açık rıza alınmadı.</p>
-          ) : (
-            <ul className="grid gap-3">
-              {consents.map((c) => (
-                <li key={c.key} className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-sm font-medium">{CONSENT_LABELS[c.key] ?? c.key}</span>
-                    <ConsentStateBadge state={c.state} />
-                  </div>
-                  {c.decidedAt ? (
-                    <p className="mt-1 text-xs text-slate-500">{formatDateTime(c.decidedAt)}</p>
-                  ) : null}
-                  {c.state === "GRANTED" && canRevoke ? (
-                    <details className="mt-2">
-                      <summary className="cursor-pointer text-sm text-red-700 dark:text-red-400">
-                        Rızayı geri çek
-                      </summary>
-                      <ActionForm
-                        action={revokeConsentAction}
-                        submitLabel="Geri çek"
-                        className="mt-3 grid gap-3"
-                      >
-                        <input type="hidden" name="patientId" value={p.id} />
-                        <input type="hidden" name="key" value={c.key} />
-                        <SelectField
-                          label="Talep kanalı"
-                          name="channel"
-                          options={REVOKE_CHANNELS}
-                          idPrefix={`rv-${c.key}`}
-                        />
-                        <Field
-                          label="Not (isteğe bağlı)"
-                          name="reason"
-                          maxLength={300}
-                          idPrefix={`rv-${c.key}`}
-                        />
-                      </ActionForm>
-                    </details>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      ) : null}
+      <div className="grid content-start gap-6">
+        {p.health ? (
+          <HealthProfileCard
+            patientId={p.id}
+            profile={p.health.profile}
+            canEdit={hasPermission(ctx, "patient.health.write")}
+            integrityError={p.health.profileIntegrityError}
+          />
+        ) : null}
+        {canDocs ? (
+          <div className="card">
+            <h2 className="mb-1 font-semibold">İletişim izinleri</h2>
+            <p className="hint mb-4">Sorulmamış izin hiçbir zaman onay sayılmaz.</p>
+            {consents.length === 0 ? (
+              <p className="text-sm text-slate-500">Henüz açık rıza alınmadı.</p>
+            ) : (
+              <ul className="grid gap-3">
+                {consents.map((c) => (
+                  <li key={c.key} className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-sm font-medium">{CONSENT_LABELS[c.key] ?? c.key}</span>
+                      <ConsentStateBadge state={c.state} />
+                    </div>
+                    {c.decidedAt ? (
+                      <p className="mt-1 text-xs text-slate-500">{formatDateTime(c.decidedAt)}</p>
+                    ) : null}
+                    {c.state === "GRANTED" && canRevoke ? (
+                      <details className="mt-2">
+                        <summary className="cursor-pointer text-sm text-red-700 dark:text-red-400">
+                          Rızayı geri çek
+                        </summary>
+                        <ActionForm
+                          action={revokeConsentAction}
+                          submitLabel="Geri çek"
+                          className="mt-3 grid gap-3"
+                        >
+                          <input type="hidden" name="patientId" value={p.id} />
+                          <input type="hidden" name="key" value={c.key} />
+                          <SelectField
+                            label="Talep kanalı"
+                            name="channel"
+                            options={REVOKE_CHANNELS}
+                            idPrefix={`rv-${c.key}`}
+                          />
+                          <Field
+                            label="Not (isteğe bağlı)"
+                            name="reason"
+                            maxLength={300}
+                            idPrefix={`rv-${c.key}`}
+                          />
+                        </ActionForm>
+                      </details>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -458,6 +539,71 @@ async function Materials({ ctx, patientId }: { ctx: Ctx; patientId: string }) {
       <div className="p-5 pt-3">
         <MaterialUsageList rows={rows} />
       </div>
+    </div>
+  );
+}
+
+async function Account({ ctx, patientId }: { ctx: Ctx; patientId: string }) {
+  const can = {
+    charge: hasPermission(ctx, "billing.charge"),
+    payment: hasPermission(ctx, "billing.payment"),
+    void: hasPermission(ctx, "billing.void"),
+  };
+  const [account, services] = await Promise.all([
+    getPatientAccount(ctx, patientId),
+    can.charge ? listBillableServices(ctx) : Promise.resolve([]),
+  ]);
+  return <PatientAccountPanel account={account} patientId={patientId} services={services} can={can} />;
+}
+
+async function Tasks({ ctx, patientId }: { ctx: Ctx; patientId: string }) {
+  const canCreate = hasPermission(ctx, "task.create");
+  const [open, done, assignees, today] = await Promise.all([
+    listTasks(ctx, { patientId, view: "open" }),
+    listTasks(ctx, { patientId, view: "done", limit: 20 }),
+    canCreate ? listAssignableUsers(ctx) : Promise.resolve([]),
+    clinicToday(ctx),
+  ]);
+  return (
+    <div className="grid gap-6">
+      {canCreate ? (
+        <SectionCard
+          title="Yeni görev"
+          description="Arama, e-posta veya görüşme hatırlatması · atanan kişiye bildirim gider"
+        >
+          <NewTaskForm
+            patientId={patientId}
+            assignees={assignees}
+            currentUserId={ctx.userId}
+            defaultDate={today}
+          />
+        </SectionCard>
+      ) : null}
+      <SectionCard title="Açık görevler" description={`${open.length} görev`}>
+        <TaskList tasks={open} showPatient={false} empty="Açık görev yok" />
+      </SectionCard>
+      {done.length ? (
+        <SectionCard title="Kapanan görevler">
+          <TaskList tasks={done} showPatient={false} />
+        </SectionCard>
+      ) : null}
+    </div>
+  );
+}
+
+async function Labs({ ctx, patientId, panelId }: { ctx: Ctx; patientId: string; panelId?: string }) {
+  const canWrite = hasPermission(ctx, "patient.health.write");
+  const [results, panels, today] = await Promise.all([
+    listLabResults(ctx, patientId),
+    canWrite ? listLabPanels(ctx, { activeOnly: true }) : Promise.resolve([]),
+    clinicToday(ctx),
+  ]);
+  const selected = panels.find((p) => p.id === panelId) ?? null;
+  return (
+    <div className="grid gap-6">
+      {canWrite ? <LabEntry patientId={patientId} panels={panels} selected={selected} today={today} /> : null}
+      <LabTrends results={results} />
+      <LabResultList patientId={patientId} results={results} canVoid={canWrite} />
     </div>
   );
 }

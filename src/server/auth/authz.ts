@@ -24,7 +24,7 @@ export type AuthContext = {
    * İsteğin kanalı — YALNIZCA sunucu atar (sesli asistan araç yürütücüsü). Audit kaynağı ve randevu kaynağı buradan
    * türetilir; model / istemci bu alanı belirleyemez.
    */
-  readonly channel?: "AI_VOICE";
+  readonly channel?: "AI_VOICE" | "AI_CHAT";
   readonly user: { firstName: string; lastName: string; email: string; twoFactorEnabled: boolean };
 };
 
@@ -59,7 +59,7 @@ export function branchFilter(ctx: AuthContext, column: PgColumn): SQL | undefine
 export function actorOf(ctx: AuthContext, source?: AuditActor["source"]): AuditActor {
   return {
     userId: ctx.userId,
-    source: source ?? (ctx.channel === "AI_VOICE" ? "AI_VOICE" : "USER"),
+    source: source ?? ctx.channel ?? "USER",
     meta: ctx.meta,
   };
 }

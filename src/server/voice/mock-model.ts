@@ -188,7 +188,7 @@ export async function simulateVoiceTurn(tc: VoiceToolContext, utterance: string)
     return done(
       en()
         ? `Today there are ${out.total} appointments; ${out.waiting} checked in, ${out.inProgress} in progress, ${out.completed} completed.`
-        : `Bugün ${out.total} randevu var; ${out.waiting} hasta giriş yaptı, ${out.inProgress} işlemde, ${out.completed} tamamlandı.`,
+        : `Bugün ${out.total} randevu var; ${out.waiting} hasta giriş yaptı, ${out.inProgress} muayenede, ${out.completed} tamamlandı.`,
     );
   }
 

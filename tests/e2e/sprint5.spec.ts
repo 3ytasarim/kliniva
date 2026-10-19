@@ -52,7 +52,7 @@ async function bookAndStart(page: Page, patient: string) {
   for (const [button, status] of [
     ["Onayla", "Onaylandı"],
     ["Hasta geldi (check-in)", "Geldi"],
-    ["Başlat", "İşlemde"],
+    ["Başlat", "Muayenede"],
   ] as const) {
     await page.getByRole("button", { name: button, exact: true }).click();
     await expect(page.getByText(status, { exact: true }).first()).toBeVisible({ timeout: 20_000 });
@@ -73,6 +73,10 @@ async function draftUsage(page: Page, apptUrl: string, itemLabel: RegExp) {
 }
 
 async function optionLabel(page: Page, re: RegExp) {
+  // Seçenekler render edilmeden okunursa etiket undefined olur ve form ilk seçenekle (başka ürün) gönderilir.
+  await expect(page.locator("#ua-inventoryItemId option").filter({ hasText: re })).toHaveCount(1, {
+    timeout: 15_000,
+  });
   const labels = await page.locator("#ua-inventoryItemId option").allTextContents();
   return labels.find((l) => re.test(l));
 }
@@ -126,6 +130,10 @@ for (const viewport of [
     ] as const) {
       await page.goto(itemUrl);
       await page.locator("summary", { hasText: "Transfer" }).click();
+      await expect(page.locator("#tr-lotRef option").filter({ hasText: `${lot} · Ana Depo` })).toHaveCount(
+        1,
+        { timeout: 15_000 },
+      );
       const refs = await page.locator("#tr-lotRef option").allTextContents();
       await page
         .locator("#tr-lotRef")

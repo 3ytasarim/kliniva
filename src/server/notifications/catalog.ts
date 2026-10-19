@@ -22,10 +22,11 @@ export const NOTIFICATION_TYPES = [
   "LOT_RECALLED",
   "DOCUMENT_INTEGRITY_FAILED",
   "SYSTEM_SECURITY_ALERT",
+  "TASK_ASSIGNED",
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 export type NotificationSeverity = "INFO" | "SUCCESS" | "WARNING" | "CRITICAL";
-export type NotificationCategory = "appointments" | "inventory" | "security";
+export type NotificationCategory = "appointments" | "inventory" | "security" | "tasks";
 
 export const CATEGORY_OF: Record<NotificationType, NotificationCategory> = {
   APPOINTMENT_CREATED: "appointments",
@@ -44,6 +45,7 @@ export const CATEGORY_OF: Record<NotificationType, NotificationCategory> = {
   LOT_RECALLED: "inventory",
   DOCUMENT_INTEGRITY_FAILED: "security",
   SYSTEM_SECURITY_ALERT: "security",
+  TASK_ASSIGNED: "tasks",
 };
 
 export const typesOfCategory = (c: NotificationCategory) =>
@@ -73,6 +75,7 @@ export const SEVERITY_OF: Record<NotificationType, NotificationSeverity> = {
   LOT_RECALLED: "CRITICAL",
   DOCUMENT_INTEGRITY_FAILED: "CRITICAL",
   SYSTEM_SECURITY_ALERT: "CRITICAL",
+  TASK_ASSIGNED: "INFO",
 };
 
 export const TYPE_LABELS: Record<NotificationType, string> = {
@@ -92,6 +95,7 @@ export const TYPE_LABELS: Record<NotificationType, string> = {
   LOT_RECALLED: "Lot geri çağrıldı",
   DOCUMENT_INTEGRITY_FAILED: "Belge bütünlük uyarısı",
   SYSTEM_SECURITY_ALERT: "Güvenlik uyarısı",
+  TASK_ASSIGNED: "Size görev atandı",
 };
 
 /** Şube saat diliminde "Bugün 14:30" / "16.10 14:30". */

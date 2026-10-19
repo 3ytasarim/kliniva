@@ -90,15 +90,15 @@ export function NotificationBell() {
         aria-haspopup="dialog"
         aria-label={unread ? `Bildirimler (${unread} okunmamış)` : "Bildirimler"}
         data-live={live ? "on" : "off"}
-        className="relative grid size-11 place-items-center rounded-lg text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+        className="relative grid size-11 place-items-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:shadow-focus aria-expanded:bg-slate-100 aria-expanded:text-slate-900 dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-slate-100 dark:aria-expanded:bg-white/5"
       >
-        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className="size-6">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className="size-[22px]">
           <path d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z" />
         </svg>
         {unread > 0 ? (
           <span
             data-testid="notification-badge"
-            className="absolute right-1 top-1 grid min-w-5 place-items-center rounded-full bg-red-600 px-1 text-xs font-semibold text-white"
+            className="absolute right-1.5 top-1.5 grid h-[18px] min-w-[18px] place-items-center rounded-full bg-red-600 px-1 text-[10px] font-semibold tabular-nums text-white ring-2 ring-white dark:ring-canvas-dark"
           >
             {unread > 99 ? "99+" : unread}
           </span>
@@ -108,14 +108,14 @@ export function NotificationBell() {
         <div
           role="dialog"
           aria-label="Son bildirimler"
-          className="absolute left-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-900"
+          className="animate-enter absolute right-0 top-full z-50 mt-2 w-96 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-line bg-white shadow-raised dark:border-line-dark dark:bg-raised-dark"
         >
-          <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+          <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-3 dark:border-line-dark">
             <p className="text-sm font-semibold">Bildirimler</p>
             {unread > 0 ? (
               <button
                 type="button"
-                className="text-xs font-medium text-brand-700 hover:underline dark:text-brand-100"
+                className="rounded text-xs font-medium text-brand-700 hover:underline focus-visible:outline-none focus-visible:shadow-focus dark:text-brand-300"
                 onClick={() => void post("/api/v1/notifications/read-all")}
               >
                 Tümünü okundu işaretle
@@ -125,11 +125,11 @@ export function NotificationBell() {
           {items.length === 0 ? (
             <p className="px-4 py-6 text-center text-sm text-slate-500">Bildirim yok.</p>
           ) : (
-            <ul className="max-h-96 divide-y divide-slate-100 overflow-y-auto dark:divide-slate-800">
+            <ul className="max-h-[26rem] divide-y divide-slate-100 overflow-y-auto dark:divide-line-dark">
               {items.map((n) => (
                 <li
                   key={n.id}
-                  className={`px-4 py-3 ${n.status === "UNREAD" ? "bg-brand-50/60 dark:bg-brand-900/30" : ""}`}
+                  className={`px-4 py-3 transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.02] ${n.status === "UNREAD" ? "bg-brand-50/50 dark:bg-brand-500/5" : ""}`}
                 >
                   <div className="flex items-start gap-2">
                     <span
@@ -147,7 +147,7 @@ export function NotificationBell() {
                         {n.href ? (
                           <Link
                             href={n.href}
-                            className="font-medium text-brand-700 hover:underline dark:text-brand-100"
+                            className="font-medium text-brand-700 hover:underline dark:text-brand-300"
                             onClick={() => setOpen(false)}
                           >
                             Görüntüle
@@ -169,10 +169,10 @@ export function NotificationBell() {
               ))}
             </ul>
           )}
-          <div className="border-t border-slate-200 px-4 py-2 text-center dark:border-slate-700">
+          <div className="border-t border-line bg-slate-50/60 px-4 py-2.5 text-center dark:border-line-dark dark:bg-white/[0.02]">
             <Link
               href="/notifications"
-              className="text-sm font-medium text-brand-700 hover:underline dark:text-brand-100"
+              className="text-sm font-medium text-brand-700 hover:underline dark:text-brand-300"
               onClick={() => setOpen(false)}
             >
               Tümünü gör

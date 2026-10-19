@@ -66,6 +66,7 @@ import {
 import type { AvailableSlot, AvailableSlotsResult, SlotReason } from "@/types/appointments";
 import { uuidSchema } from "@/server/validation";
 import { enqueueOutbox, type OutboxEventType } from "@/server/notifications/outbox";
+import { createAppointmentCharge } from "@/server/services/billing";
 
 /**
  * Randevu uygulama servisleri — HTTP / server action / (ileride) Voice AI bağımsız. Her çağrı oturumdaki
@@ -230,8 +231,8 @@ export async function visibleAppointmentSummaries(
   return out;
 }
 
-const eventSource = (ctx: AuthContext): "STAFF" | "DOCTOR" | "AI_VOICE" =>
-  ctx.channel === "AI_VOICE" ? "AI_VOICE" : hasPermission(ctx, "appointment.read") ? "STAFF" : "DOCTOR";
+const eventSource = (ctx: AuthContext): "STAFF" | "DOCTOR" | "AI_VOICE" | "AI_CHAT" =>
+  ctx.channel ?? (hasPermission(ctx, "appointment.read") ? "STAFF" : "DOCTOR");
 
 async function addEvent(
   scope: TenantScope,
@@ -992,7 +993,7 @@ export async function createAppointment(
           timezone: p.timezone,
           durationMinutes: p.spec.duration,
           // Sesli asistan kanalı sunucu bağlamından (istemci girdisinden değil).
-          source: ctx.channel === "AI_VOICE" ? "AI_VOICE" : data.source,
+          source: ctx.channel ?? data.source,
           notesEncrypted: data.notes ? encryptField(data.notes, notesAad(scope.tenantId, id)) : null,
           createdByUserId: ctx.userId,
         })
@@ -1137,6 +1138,22 @@ const STATUS_RULES: Record<
   },
 };
 
+/**
+ * Tek adımda muayeneyi başlat: hasta "geldi" işaretlenmemişse önce GELDİ, ardından BAŞLAT. İki geçiş de
+ * updateAppointmentStatus ile ayrı ayrı izin / kapsam / durum makinesi / audit / bildirim kontrolünden geçer;
+ * başlatma / check-in yetkisi geçişlerden ÖNCE doğrulanır (FORBIDDEN), hiçbir şey yarım yapılmaz.
+ */
+export async function startExamination(ctx: AuthContext, rawId: unknown): Promise<void> {
+  // Yetkiler HİÇBİR geçişten önce doğrulanır: yarım işlem (geldi işaretlendi ama başlatılamadı) olmaz.
+  requirePermission(ctx, "appointment.start");
+  const a = await getAppointment(ctx, rawId);
+  if (a.status === "BOOKED" || a.status === "CONFIRMED") {
+    requirePermission(ctx, "appointment.checkin");
+    await updateAppointmentStatus(ctx, rawId, { status: "CHECKED_IN" });
+  }
+  await updateAppointmentStatus(ctx, rawId, { status: "IN_PROGRESS" });
+}
+
 /** Durum geçişi (serbest string güncellemesi yok): izin + geçiş tablosu + DB tetikleyicisi. */
 export async function updateAppointmentStatus(
   ctx: AuthContext,
@@ -1166,6 +1183,8 @@ export async function updateAppointmentStatus(
     // (durum makinesi) + bildirim tekilleştirme → yinelenen bildirim yok.
     if (data.status === "CHECKED_IN") await appointmentOutbox(scope, ctx, "APPOINTMENT_CHECKED_IN", a);
     if (data.status === "CONFIRMED") await appointmentOutbox(scope, ctx, "APPOINTMENT_CONFIRMED", a);
+    // Sprint 8: tamamlanan randevunun hizmet bedeli AYNI işlemde hasta hesabına yansır (fiyatlı hizmette).
+    if (data.status === "COMPLETED") await createAppointmentCharge(scope, ctx, a);
   });
 }
 

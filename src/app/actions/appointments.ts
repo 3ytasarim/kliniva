@@ -19,9 +19,17 @@ import {
   createAppointment,
   getAvailableSlots,
   rescheduleAppointment,
+  startExamination,
   updateAppointmentNotes,
   updateAppointmentStatus,
 } from "@/server/services/appointments";
+import { saveClinicalNote } from "@/server/services/clinical-notes";
+import {
+  ATTACHMENT_MAX_BYTES,
+  uploadClinicalAttachment,
+  voidClinicalAttachment,
+} from "@/server/services/clinical-attachments";
+import { AppError } from "@/server/errors";
 import type { AvailableSlotsResult, BookingOption, PatientOption, ServiceOption } from "@/types/appointments";
 
 /**
@@ -125,6 +133,24 @@ export async function appointmentStatusAction(_p: ActionState, form: FormData): 
   });
 }
 
+const revalidateAppointmentViews = (id: string) => {
+  revalidatePath(`/appointments/${id}`);
+  revalidatePath("/appointments");
+  revalidatePath("/doctor");
+  revalidatePath("/dashboard");
+  revalidatePath("/operations/today");
+};
+
+/** Tek tıkla muayeneyi başlat (GELDİ gerekiyorsa önce o; bkz. startExamination). */
+export async function startExaminationAction(_p: ActionState, form: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const { id } = formToObject(form);
+    await startExamination(await requireUser(), id);
+    revalidateAppointmentViews(String(id));
+    return "Muayene başladı.";
+  });
+}
+
 /** Doktor onayı — yalnızca KENDİ onay bekleyen randevusu (servis doktor eşleşmesini zorunlu tutar). */
 export async function approveAppointmentAction(_p: ActionState, form: FormData): Promise<ActionState> {
   return runAction(async () => {
@@ -200,5 +226,54 @@ export async function setDoctorServicesAction(_p: ActionState, form: FormData): 
     revalidatePath(`/admin/doctors/${doctorId}`);
     revalidatePath("/settings/services");
     return "Doktorun hizmetleri güncellendi.";
+  });
+}
+
+/** Muayene kaydı (sağlık verisi) — yeni sürüm olarak kaydeder; aynı içerik yeni sürüm üretmez. */
+export async function saveClinicalNoteAction(_p: ActionState, form: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const { id, complaint, history, findings, procedures, plan, advice } = formToObject(form);
+    const r = await saveClinicalNote(await requireUser(), id, {
+      complaint,
+      history,
+      findings,
+      procedures,
+      plan,
+      advice,
+    });
+    revalidatePath(`/appointments/${String(id)}`);
+    return r.unchanged
+      ? "Değişiklik yok; kayıt aynı kaldı."
+      : `Muayene kaydı kaydedildi (sürüm ${r.version}).`;
+  });
+}
+
+// ---------------------------------------------------------------- Sprint 8.2: muayene dosyaları
+export async function uploadClinicalAttachmentAction(_p: ActionState, form: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const id = form.get("id");
+    const file = form.get("file");
+    if (!(file instanceof File) || file.size === 0) {
+      throw new AppError("VALIDATION", { fields: ["file"], message: "Lütfen bir dosya seçin." });
+    }
+    // İstemcinin bildirdiği MIME kullanılmaz; tür içerikten belirlenir. Boyut önce burada da kontrol edilir.
+    if (file.size > ATTACHMENT_MAX_BYTES) {
+      throw new AppError("VALIDATION", { fields: ["file"], message: "Dosya en fazla 5 MB olabilir." });
+    }
+    await uploadClinicalAttachment(await requireUser(), id, {
+      name: file.name,
+      data: Buffer.from(await file.arrayBuffer()),
+    });
+    revalidatePath(`/appointments/${String(id)}`);
+    return "Dosya eklendi.";
+  });
+}
+
+export async function voidClinicalAttachmentAction(_p: ActionState, form: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const { id, appointmentId, reason } = formToObject(form);
+    await voidClinicalAttachment(await requireUser(), id, { reason });
+    revalidatePath(`/appointments/${appointmentId}`);
+    return "Dosya geçersiz kılındı.";
   });
 }

@@ -30,6 +30,24 @@ Tarayıcı (voice-assistant.tsx)                     Sunucu (Next.js)           
 - AI doğrudan DB'ye erişmez; yeni SQL yazmaz; yalnızca mevcut servisleri `ctx.channel = "AI_VOICE"` ile çağırır.
 - Ham ses ve tam döküm **saklanmaz**. Panel kapatılınca ekrandaki döküm de silinir.
 
+## Yazılı sohbet (Sprint 7.2)
+
+Aynı panelde **Yazışma** sekmesi (varsayılan). Tarayıcı yalnızca `POST /api/v1/assistant/session` ve
+`POST /api/v1/assistant/chat {sessionId, message}` çağırır; model (OpenAI Chat Completions, `OPENAI_CHAT_MODEL`,
+varsayılan `gpt-4.1-mini`) ve araç döngüsü (en fazla 6 tur, paralel araç çağrısı kapalı) **tamamen sunucuda** çalışır;
+istemciye hiçbir sır dönmez.
+
+- Araçlar, kapsam, onay ve idempotency sesli asistanla **aynı katman** (`runVoiceTool`). Onay ayrıştırması kullanıcının
+  KENDİ son mesajıyla yapılır: model "olabilir" sonrası onay aracını çağırsa bile yürütme olmaz
+  (`CONFIRMATION_NOT_DETECTED`). Ekrandaki "Onayla / İptal" aynı uç noktaları kullanır.
+- Kaynak / audit / randevu geçmişi: `AI_CHAT` (ses: `AI_VOICE`). Oturum kanalı (`voice_sessions.channel`) değişmez.
+- Kanal izolasyonu: sohbet oturumu ses araç uç noktasında, ses oturumu sohbet uç noktasında kullanılamaz (NOT_FOUND).
+- Konuşma geçmişi **yalnızca sunucu belleğinde** (30 dk, en fazla 40 mesaj, oturum bitince silinir); veritabanına veya
+  log dosyalarına yazılmaz. Sayfa yenilenirse sohbet yeniden başlar.
+- Tıbbi soru: model çağrılmadan ret. Yanıttaki saat / sayı araç sonuçlarında yoksa güvenli geri dönüş (grounding).
+- Sınır: kanal başına, kullanıcı başına 2 etkin oturum; sohbette sınıra gelinince en eski sohbet kapatılır (seste hata).
+- Hız sınırı: kullanıcı başına 5 dakikada 40 mesaj.
+
 ## Araçlar (19)
 
 | Tür   | Araç                                                                                                                                                                                                                                                                                                          |
@@ -79,6 +97,7 @@ DB koruması: girdi / özet / anahtar / kimlik / süre değişmez; son durumlar 
 | `OPENAI_REALTIME_MODEL`     | `gpt-realtime`           |                                                                |
 | `OPENAI_TRANSCRIBE_MODEL`   | `gpt-4o-mini-transcribe` |                                                                |
 | `OPENAI_REALTIME_VOICE`     | `marin`                  |                                                                |
+| `OPENAI_CHAT_MODEL`         | `gpt-4.1-mini`           | Yazılı sohbet modeli (yalnızca sunucu)                         |
 | `VOICE_CONFIRM_TTL_SECONDS` | `120`                    | 1–600                                                          |
 | `VOICE_TRANSPORT=mock`      | tanımsız                 | YALNIZCA test / E2E: ağ çağrısı yok, metin komut kutusu açılır |
 

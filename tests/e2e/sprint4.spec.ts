@@ -52,7 +52,7 @@ async function bookAndStart(page: Page, patient: string) {
   for (const [button, status] of [
     ["Onayla", "Onaylandı"],
     ["Hasta geldi (check-in)", "Geldi"],
-    ["Başlat", "İşlemde"],
+    ["Başlat", "Muayenede"],
   ] as const) {
     await page.getByRole("button", { name: button, exact: true }).click();
     await expect(page.getByText(status, { exact: true }).first()).toBeVisible({ timeout: 20_000 });

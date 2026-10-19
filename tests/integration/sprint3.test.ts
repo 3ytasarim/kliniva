@@ -782,7 +782,7 @@ describe("Durum makinesi", () => {
     expect((await getAppointment(owner(), a.id)).status).toBe("NO_SHOW");
   });
 
-  it("izin matrisi: resepsiyon başlatamaz; doktor check-in yapamaz", async () => {
+  it("izin matrisi: resepsiyon başlatamaz; doktor YALNIZCA kendi randevusunda geldi / başlat / tamamla", async () => {
     const a = await book(reception(), {
       patient: P[21]!,
       doctor: D1,
@@ -801,9 +801,29 @@ describe("Durum makinesi", () => {
       time: "14:00",
       service: S_CONS,
     });
-    expect(await code(updateAppointmentStatus(A.users.docA!.ctx, b.id, { status: "CHECKED_IN" }))).toBe(
-      "FORBIDDEN",
-    );
+    // Resepsiyonsuz akış: doktor kendi hastasını "geldi" işaretler, başlatır, tamamlar.
+    await updateAppointmentStatus(A.users.docA!.ctx, b.id, { status: "CHECKED_IN" });
+    await updateAppointmentStatus(A.users.docA!.ctx, b.id, { status: "IN_PROGRESS" });
+    await updateAppointmentStatus(A.users.docA!.ctx, b.id, { status: "COMPLETED" });
+    // Başka doktorun randevusu: görünmez → hiçbir geçiş yapılamaz.
+    const c = await book(reception(), {
+      patient: P[21]!,
+      doctor: D2,
+      date: monday(13),
+      time: "15:00",
+      service: S_CONS,
+    });
+    for (const status of ["CHECKED_IN", "NO_SHOW", "IN_PROGRESS"] as const) {
+      expect(await code(updateAppointmentStatus(A.users.docA!.ctx, c.id, { status })), status).toBe(
+        "NOT_FOUND",
+      );
+    }
+    // "Gelmedi" randevu saati gelmeden işaretlenemez (doktor da resepsiyon da).
+    for (const actor of [A.users.docB!.ctx, reception()]) {
+      expect(await code(updateAppointmentStatus(actor, c.id, { status: "NO_SHOW" }))).toBe(
+        "INVALID_STATUS_TRANSITION",
+      );
+    }
   });
 });
 
@@ -917,14 +937,14 @@ describe("Kapsam: kiracı, şube, doktor", () => {
 });
 
 describe("Notlar, audit ve günlük görünümler", () => {
-  it("operasyon notu şifreli saklanır; audit / geçmiş içerik içermez", async () => {
+  it("muayene notu şifreli saklanır; audit / geçmiş içerik içermez", async () => {
     const a = await createAppointment(reception(), {
       patientId: P[28]!,
       branchId: A.branchA,
       doctorId: D2,
       serviceId: S_CONS,
       start: at(monday(15), "09:00"),
-      notes: "Gizli operasyon notu: refakatçi gelecek",
+      notes: "Gizli muayene notu: refakatçi gelecek",
     });
     await updateAppointmentNotes(reception(), a.id, { notes: "İkinci gizli not" });
     expect((await getAppointment(reception(), a.id)).notes).toBe("İkinci gizli not");

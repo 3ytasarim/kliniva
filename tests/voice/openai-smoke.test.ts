@@ -3,6 +3,7 @@ import { loadEnvLocal } from "../support/load-env-local";
 import { OpenAIRealtimeTransport } from "@/server/voice/transport";
 import { realtimeToolDefinitions } from "@/server/voice/tools";
 import { buildVoiceInstructions } from "@/server/voice/instructions";
+import { OpenAIChatModel } from "@/server/assistant/chat";
 
 /**
  * İSTEĞE BAĞLI gerçek OpenAI Realtime duman testi (npm run test:voice).
@@ -32,6 +33,29 @@ describe.skipIf(!hasKey)("OpenAI Realtime duman testi", () => {
     expect(ttl).toBeGreaterThan(0);
     expect(ttl).toBeLessThanOrEqual(10 * 60_000);
   }, 30_000);
+
+  it("yazılı sohbet: model + 19 araç şeması + talimatlar kabul edilir; araç gerektiren soruda araç çağrılır", async () => {
+    const m = new OpenAIChatModel(process.env.OPENAI_API_KEY!);
+    const tools = realtimeToolDefinitions().map((t) => ({
+      type: "function",
+      function: { name: t.name, description: t.description, parameters: t.parameters },
+    }));
+    const system = buildVoiceInstructions({
+      language: "tr",
+      privacyMode: "DISCREET",
+      clinicName: "Duman Testi",
+      mode: "chat",
+    });
+    const out = await m.complete(
+      [
+        { role: "system", content: system },
+        { role: "user", content: "Kritik stokta hangi ürünler var?" },
+      ],
+      tools,
+    );
+    // Veri kuralı: stok sorusunda model sayı uydurmaz, aracı çağırır.
+    expect(out.toolCalls.map((c) => c.function.name)).toContain("voice_get_low_stock");
+  }, 45_000);
 });
 
 describe.skipIf(hasKey)("OpenAI Realtime duman testi (anahtar yok)", () => {

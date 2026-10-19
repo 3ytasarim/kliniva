@@ -70,7 +70,72 @@ onaylı yazma eylemleri (PendingAIAction: 2 dk, aynı kullanıcı + oturum, şif
 idempotency), `AI_VOICE` kaynaklı audit, ölçülü gizlilik modu, tıbbi karar sınırı, sahte taşıyıcı + metin düzeneği.
 Ayrıntı: `docs/VOICE.md`.
 
+## Sprint 7.2 — Tasarım sistemi v2 ve yazılı sohbet asistanı ✅
+
+Tasarım sistemi v2: Inter (kendi sunucumuzdan), yüzey / kenarlık / gölge token'ları, shadcn/ui tarzı bileşenler
+(Button, Card, Tabs, DropdownMenu, Popover, Calendar, Tooltip), lucide simgeler; CSP uyumlu (Radix menüler modal=false →
+<style> enjeksiyonu yok). Gruplu kenar menü + üst çubuk; yeni Panel, Bugünkü muayeneler, Randevu takvimi (mini takvim,
+filtre menüleri, avatarlı doktor sütunları, durum renkli etkinlikler, şimdi çizgisi), Hastalar, hasta profili, Planım.
+"Operasyon" → "Muayene" terminolojisi (tüm roller). Kliniva AI paneli: Yazışma (sunucu tarafı model + aynı 19 araç +
+aynı onay) ve Sesli sekmeleri; yazılı sohbet kaynağı `AI_CHAT`. Ayrıntı: `docs/VOICE.md`.
+
+## Sprint 7.3 — Muayene kaydı ✅
+
+Randevu detay sayfası yenilendi (üst kart, ilerleme adımları, iki sütun). Doktor, hasta geldikten sonra kendi
+randevusuna muayene kaydı yazar (şikâyet, bulgular, yapılan işlemler, plan): şifreli, sürümlü, yalnızca ekleme;
+yönetici okur ama yazamaz, resepsiyon göremez. Migration 0020–0021.
+
+## Sprint 8 — Hasta hesabı ve kasa ✅
+
+Hekim Rehberi karşılaştırmasından çıkan 1. ve 2. madde. Hizmetlere fiyat + para birimi; randevu TAMAMLANINCA hizmet
+bedeli otomatik hasta hesabına yansır (randevu başına tek). Hasta dosyasında "Hesap" sekmesi ve randevu sayfasında
+"Ücret ve tahsilat": elle bedel (adet, indirim), tahsilat (nakit / kart / havale / diğer), bakiye. Kasa: hastasız
+gelir / gider, kategoriler, dönem özetleri (7 gün / ay / yıl / toplam), hareket listesi. Açık bakiyeler listesi.
+Panel: bu ay tahsilat (geçen ayın aynı dönemine göre), açık bakiye, bu ay kasa, son 6 ay gelir-gider grafiği, en çok
+ciro yapan hizmetler, borçlu hastalar. Kayıtlar DEĞİŞTİRİLEMEZ: yalnızca gerekçeli iptal (DB tetikleyicisi). Yetkiler:
+`billing.read/charge/payment/void`, `cash.read/manage` (resepsiyon: görüntüle + bedel + tahsilat; doktor: yok).
+Migration 0022–0023.
+
+## Sprint 8.1 — Hasta kartı ve liste segmentleri ✅
+
+Hekim Rehberi karşılaştırmasının 3. maddesi. Kiracıya özel hasta tanımları (kaynak, özel sigorta; Ayarlar → Hasta
+tanımları), hasta kartında kaynak / yönlendiren / sosyal güvence / özel sigorta / SMS izni. Şifreli sağlık profili
+(kan grubu, alerjiler, kronik hastalıklar, ilaçlar, sigara, alkol) — alerji hasta başlığında ve randevu (muayene)
+ekranında uyarı olarak. Hasta listesi: özet kartları, segmentler (yaklaşan randevulu, açık bakiyeli, 90+ gündür
+gelmeyen, tekrar gelen, hiç ziyareti yok, bu ay kayıt), kaynak filtresi; son ziyaret / ziyaret sayısı / sonraki
+randevu / bakiye sütunları. Panel: hasta kaynakları (son 90 gün ziyaret). Migration 0024–0025.
+
+## Sprint 8.2 — Muayene kaydı alanları ve dosyalar ✅
+
+Hekim Rehberi karşılaştırmasının 4. maddesi. Muayene kaydına "Öykü / geçmiş" ve "Hastaya tavsiyeler" alanları
+(eski sürümler boş alanla okunur); alerjiler hasta sağlık profilinden gelir ve muayene ekranında uyarı olarak görünür.
+Muayeneye şifreli dosya ekleme (tahlil sonucu, fotoğraf, PDF): tür içerikten doğrulanır, en çok 5 MB, randevu başına
+20; indirme yetki kontrollü uç (`/api/v1/clinical-attachments/:id`), bütünlük doğrulaması ve audit; silinmez,
+gerekçeyle geçersiz kılınır. Migration 0026–0027. Açık konu: yükleme sonrası kayıt başarısız olursa depoda yetim
+nesne kalabilir (yetim nesne temizliği bakım işi).
+
+## Sprint 8.3 — Hasta görevleri ✅
+
+Hekim Rehberi karşılaştırmasının 5. maddesi. Hastaya bağlı arama / e-posta / SMS / görüşme görevleri: tür, başlık,
+termin, atanan kişi, not; sonuç (Tamamlandı / Ulaşılamadı / İptal + not) ve geri açılamaz kapanış. Atama yalnızca o
+şubede görev görebilen aktif kullanıcıya; başkasına atanınca uygulama içi bildirim (TASK_ASSIGNED, metinde hasta /
+başlık yok). Görünürlük: doktor / asistan kendi görevleri, resepsiyon / yönetim şube kapsamındaki tümü
+(`task.read`, `task.create`, `task.manage`). Görevler sayfası (açık / geciken / bugün / kapanan), hasta dosyasında
+Görevler sekmesi, panelde "Bana atanmış işler". Migration 0028–0029.
+
+## Sprint 8.4 — Tahliller ✅
+
+Hekim Rehberi karşılaştırmasının 6. maddesi. Tahlil tipleri (Ayarlar → Tahlil tipleri; "Ad | birim | alt | üst"
+satırlarıyla parametreler ve referans aralıkları). Hasta dosyasında Tahliller sekmesi: tip seçip numune tarihi ve
+değerleri girme, aralık dışı değerlerin ↑/↓ işaretlenmesi, tip başına son 6 sonucun değişim tablosu, sonuç listesi.
+Sonuç girildiği andaki ad / birim / aralık sonuçta saklanır (tip sonradan değişse de eski sonuç değişmez). Değerler
+şifreli; düzeltme yok, gerekçeyle geçersiz kılınır. Yetki: tip yönetimi `clinic.manage`, sonuç
+`patient.health.write` / `patient.health.read`. Migration 0030–0031.
+
 ## Sprint 8+ (öneri)
+
+Hekim Rehberi karşılaştırması sırası (1–6 tamam): (7) hasta bildirimleri (SMS / WhatsApp — sağlayıcı kararı gerekli), (8) online randevu
+talepleri.
 
 Gerçek OpenAI anahtarıyla saha doğrulaması (WebRTC, barge-in, gürültü), raporlama, KVKK m.11 bilgi talebi
 dışa aktarımı ve düzeltme akışı, MFA zorunluluğu, orphan depo nesnesi temizliği.

@@ -60,6 +60,10 @@ describe("İstemci paketi (client bundle)", () => {
       if (key && key.length >= 16 && content.includes(key)) offenders.push(`${rel}: anahtar DEĞERİ`);
       // Kısa ömürlü sır YALNIZCA sunucuda üretilir (tarayıcı yalnızca /api/v1/voice/session çağırır).
       if (content.includes("realtime/client_secrets")) offenders.push(`${rel}: client_secrets üretimi`);
+      // Yazılı sohbet model çağrısı da YALNIZCA sunucuda (tarayıcı yalnızca /api/v1/assistant/chat çağırır).
+      if (content.includes("chat/completions")) offenders.push(`${rel}: sohbet modeli çağrısı`);
+      if (content.includes("OPENAI_CHAT_MODEL"))
+        offenders.push(`${rel}: sunucu sohbet modeli yapılandırması`);
       if (content.includes("OPENAI_REALTIME_MODEL")) offenders.push(`${rel}: sunucu model yapılandırması`);
     }
     expect(offenders).toEqual([]);

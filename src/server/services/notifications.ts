@@ -38,7 +38,7 @@ import {
  * Alıcı her zaman oturumdan (ctx.userId) gelir; istemci parametresinden ASLA.
  */
 export const listNotificationsInput = z.object({
-  filter: z.enum(["all", "unread", "appointments", "inventory", "security"]).default("all"),
+  filter: z.enum(["all", "unread", "appointments", "inventory", "security", "tasks"]).default("all"),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(25),
 });
@@ -133,6 +133,13 @@ async function resolveNotificationLinks(
       const v = r.entityType === "appointment" && r.entityId ? visible.get(r.entityId) : undefined;
       if (v)
         out.set(r.id, { href: `/appointments/${r.entityId}`, context: `${v.localStart} — ${v.patientName}` });
+    }
+  }
+
+  // Görev bildirimi: alıcı görevin atandığı kişidir; görev listesine (bana atananlar) bağlanır.
+  if (hasPermission(ctx, "task.read")) {
+    for (const r of rows) {
+      if (r.entityType === "patient_task" && r.entityId) out.set(r.id, { href: "/tasks", context: null });
     }
   }
 

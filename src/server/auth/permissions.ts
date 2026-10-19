@@ -38,11 +38,11 @@ export const PERMISSIONS = {
   "appointment.read": "Randevuları görüntüleme (şube kapsamında)",
   "appointment.read.own": "Doktorun YALNIZCA kendi randevularını görüntülemesi",
   "appointment.create": "Randevu oluşturma",
-  "appointment.update": "Randevuyu onaylama / operasyon notu",
+  "appointment.update": "Randevuyu onaylama / muayene notu",
   "appointment.reschedule": "Randevu taşıma",
   "appointment.cancel": "Randevu iptali",
   "appointment.checkin": "Hasta girişi (check-in)",
-  "appointment.start": "Randevuyu başlatma (işlemde)",
+  "appointment.start": "Muayeneyi başlatma",
   "appointment.complete": "Randevuyu tamamlama",
   "appointment.no_show": "Gelmedi olarak işaretleme",
   "appointment.availability.read": "Doktor uygunluğunu / boş saatleri görüntüleme",
@@ -77,6 +77,17 @@ export const PERMISSIONS = {
   "appointment.decline_own": "Kendi onay bekleyen randevusunu reddetme",
   // Sprint 7 — sesli asistan (araçlar ayrıca alttaki iş izinlerini uygular; ek yetki VERMEZ)
   "voice.use": "Kliniva AI sesli asistanı kullanma",
+  // Sprint 8 — hasta hesabı ve kasa (şube kapsamı servis katmanında)
+  "billing.read": "Hasta hesaplarını (hizmet bedeli, tahsilat, bakiye) görüntüleme",
+  "billing.charge": "Hastaya hizmet bedeli ekleme",
+  "billing.payment": "Hastadan tahsilat alma",
+  "billing.void": "Hizmet bedeli / tahsilat iptali (gerekçeli, geri alınamaz)",
+  "cash.read": "Kasayı ve gelir-gider raporlarını görüntüleme",
+  "cash.manage": "Kasa gelir / gider kaydı ve kasa kategorileri",
+  // Sprint 8.3 — hasta görevleri (arama / e-posta / görüşme hatırlatmaları)
+  "task.read": "Hasta görevlerini görüntüleme (yalnızca kendine atanan / oluşturduğu; task.manage ile tümü)",
+  "task.create": "Hasta görevi oluşturma",
+  "task.manage": "Şubedeki tüm hasta görevlerini görme, atama ve düzenleme",
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;
@@ -139,6 +150,20 @@ const LOT_OPERATE: Permission[] = [
   "inventory.write_off",
   "inventory.physical_count",
 ];
+/** Finans: hasta hesabı + kasa (tamamı). Resepsiyon yalnızca görüntüler / bedel ekler / tahsilat alır. */
+const FINANCE_FULL: Permission[] = [
+  "billing.read",
+  "billing.charge",
+  "billing.payment",
+  "billing.void",
+  "cash.read",
+  "cash.manage",
+];
+const BILLING_DESK: Permission[] = ["billing.read", "billing.charge", "billing.payment"];
+/** Görevler: tamamı (resepsiyon / yönetim) ve kendi görevleri (doktor / asistan). */
+const TASKS_FULL: Permission[] = ["task.read", "task.create", "task.manage"];
+const TASKS_OWN: Permission[] = ["task.read", "task.create"];
+
 /** Hasta malzeme kullanımı (VOID hariç). */
 const INVENTORY_USAGE: Permission[] = [
   "inventory.read",
@@ -187,6 +212,8 @@ const ADMIN_BASE: Permission[] = [
   // yöneticiye başka doktor adına onay yetkisi VERMEZ; DOCTOR ⊆ CLINIC_OWNER kuralı için burada da bulunur.
   "appointment.approve_own",
   "appointment.decline_own",
+  ...FINANCE_FULL,
+  ...TASKS_FULL,
 ];
 
 /** Her kullanıcı yalnızca KENDİ bildirimlerini görür / tercihlerini yönetir (alıcı kapsamı servis katmanında). */
@@ -223,6 +250,9 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       ...INVENTORY_MANAGE,
       ...INVENTORY_USAGE,
       ...LOT_OPERATE,
+      // Şube müdürü: kendi şubesinin hasta hesapları ve kasası.
+      ...FINANCE_FULL,
+      ...TASKS_FULL,
     ],
   },
   // Doktor: hasta kaydı açmaz / belge imzalatmaz (resepsiyon akışı). Tıbbi notu yazabilmesi için patient.update.
@@ -239,11 +269,15 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       "patient.document.read",
       // Yalnızca KENDİ planını görür; plan değişikliği klinik politikasına bağlı (şimdilik yönetim rolleri).
       "doctor.self.read",
-      // Randevu: yalnızca KENDİ randevuları; muayeneyi başlatır / tamamlar. Check-in resepsiyondadır.
+      // Randevu: yalnızca KENDİ randevuları (servis görünürlüğü doktoru kendi kaydıyla sınırlar). Resepsiyonsuz akışta
+      // da sayılar doğru olsun diye hastanın geldiğini / gelmediğini kendisi işaretler, muayeneyi başlatır / tamamlar.
+      // İptal / taşıma resepsiyon ve yönetimdedir.
       "service.read",
       "appointment.read.own",
+      "appointment.checkin",
       "appointment.start",
       "appointment.complete",
+      "appointment.no_show",
       "appointment.availability.read",
       // Malzeme: yalnızca KENDİ randevusuna bağlı kullanım (servis, doktorun kendi kaydıyla sınırlar).
       // Lotları kullanım sırasında görür; geri çağırma / hasta izleme YOK.
@@ -252,6 +286,8 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       // Onay modu: yalnızca KENDİ randevusunu onaylar / reddeder.
       "appointment.approve_own",
       "appointment.decline_own",
+      // Takip görevi oluşturur (ör. "sonucu hastaya bildir"); yalnızca kendi atanan / oluşturduğu görevleri görür.
+      ...TASKS_OWN,
     ],
   },
   ASSISTANT: {
@@ -272,6 +308,7 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       ...INVENTORY_USAGE,
       "inventory.low_stock.read",
       "inventory.lot.read",
+      ...TASKS_OWN,
     ],
   },
   RECEPTION: {
@@ -293,7 +330,13 @@ export const SYSTEM_ROLES: Record<RoleKey, { name: string; permissions: Permissi
       "appointment.reschedule",
       "appointment.cancel",
       "appointment.checkin",
+      // Randevu saati geçen ve gelmeyen hastayı işaretler (sunucu saat gelmeden izin vermez).
+      "appointment.no_show",
       "appointment.availability.read",
+      // Hizmet bedeli ekler, tahsilat alır; iptal ve kasa (gider) yönetimdedir.
+      ...BILLING_DESK,
+      // Hasta arama / hatırlatma görevlerinin tamamını yönetir.
+      ...TASKS_FULL,
       "inventory.read",
       "inventory.low_stock.read",
       "inventory.lot.read",

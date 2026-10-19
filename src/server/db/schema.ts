@@ -31,6 +31,7 @@ import {
   time,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 import type { TemplateChoice } from "@/types/patients";
@@ -48,7 +49,7 @@ const updatedAt = () =>
 
 export const tenantStatus = kliniva.enum("tenant_status", ["ACTIVE", "SUSPENDED"]);
 export const sessionState = kliniva.enum("session_state", ["MFA_PENDING", "ACTIVE"]);
-export const auditSource = kliniva.enum("audit_source", ["USER", "SYSTEM", "AI_VOICE", "API"]);
+export const auditSource = kliniva.enum("audit_source", ["USER", "SYSTEM", "AI_VOICE", "API", "AI_CHAT"]);
 export const documentType = kliniva.enum("document_type", [
   "KVKK_DISCLOSURE",
   "EXPLICIT_CONSENT",
@@ -319,6 +320,19 @@ export const patients = kliniva.table(
     /** [SENSITIVE_PERSONAL] TC kimlik no — yalnızca şifreli; düz metin asla yazılmaz. */
     nationalIdEncrypted: text("national_id_encrypted"),
     notesEncrypted: text("notes_encrypted"),
+    /** Sprint 8.1: hasta kaynağı / özel sigorta (patient_lookups, tür servis katmanında doğrulanır). */
+    sourceId: uuid("source_id"),
+    insurerId: uuid("insurer_id"),
+    socialSecurity: text("social_security"),
+    /** Yönlendiren kişi / kurum (serbest metin, kısa). */
+    referral: text("referral"),
+    /** Bilgilendirme SMS'i gönderilebilir (hasta beyanı). */
+    smsAllowed: boolean("sms_allowed").notNull().default(false),
+    /**
+     * [HEALTH_SPECIAL_CATEGORY] Sağlık profili (kan grubu, alerjiler, kronik hastalıklar, ilaçlar, sigara, alkol) —
+     * AES-256-GCM JSON; yalnızca patient.health.* ile okunur / yazılır.
+     */
+    healthProfileEncrypted: text("health_profile_encrypted"),
     active: boolean("active").notNull().default(true),
     createdByUserId: uuid("created_by_user_id"),
     createdAt: createdAt(),
@@ -335,6 +349,44 @@ export const patients = kliniva.table(
     index("patients_tenant_branch_idx").on(t.tenantId, t.primaryBranchId),
     index("patients_tenant_phone_idx").on(t.tenantId, t.phoneNormalized),
     index("patients_tenant_email_idx").on(t.tenantId, t.emailNormalized),
+    foreignKey({
+      name: "patients_source_fk",
+      columns: [t.tenantId, t.sourceId],
+      foreignColumns: [patientLookups.tenantId, patientLookups.id],
+    }),
+    foreignKey({
+      name: "patients_insurer_fk",
+      columns: [t.tenantId, t.insurerId],
+      foreignColumns: [patientLookups.tenantId, patientLookups.id],
+    }),
+    check(
+      "patients_social_security_ck",
+      sql`${t.socialSecurity} is null or ${t.socialSecurity} in ('NONE', 'SGK', 'BAG_KUR', 'EMEKLI_SANDIGI', 'GSS', 'OTHER')`,
+    ),
+    check("patients_referral_ck", sql`${t.referral} is null or length(${t.referral}) <= 120`),
+    index("patients_source_idx").on(t.tenantId, t.sourceId),
+  ],
+);
+
+/** Sprint 8.1: kiracıya özel hasta tanımları — kaynak (Google, Instagram, Tavsiye…) ve özel sigorta kurumları. */
+export const patientLookupKind = kliniva.enum("patient_lookup_kind", ["SOURCE", "INSURER"]);
+export const patientLookups = kliniva.table(
+  "patient_lookups",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    kind: patientLookupKind("kind").notNull(),
+    name: text("name").notNull(),
+    active: boolean("active").notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    unique("patient_lookups_tenant_id_uq").on(t.tenantId, t.id),
+    unique("patient_lookups_name_uq").on(t.tenantId, t.kind, t.name),
+    check("patient_lookups_name_ck", sql`length(${t.name}) between 2 and 60`),
   ],
 );
 
@@ -855,6 +907,7 @@ export const appointmentSource = kliniva.enum("appointment_source", [
   "PATIENT_PORTAL",
   "AI_VOICE",
   "API",
+  "AI_CHAT",
 ]);
 export const appointmentEventType = kliniva.enum("appointment_event_type", [
   "CREATED",
@@ -885,6 +938,9 @@ export const clinicalServices = kliniva.table(
     requiresRoom: boolean("requires_room").notNull().default(true),
     /** NULL / boş → oda tipi kısıtı yok (aktif her oda). */
     allowedRoomTypes: roomType("allowed_room_types").array(),
+    /** Sprint 8: liste fiyatı (kuruş / cent). NULL → fiyatsız hizmet (otomatik hizmet bedeli oluşmaz). */
+    priceMinor: integer("price_minor"),
+    currency: text("currency").notNull().default("TRY"),
     active: boolean("active").notNull().default(true),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -894,6 +950,11 @@ export const clinicalServices = kliniva.table(
     unique("clinical_services_tenant_name_uq").on(t.tenantId, t.name),
     unique("clinical_services_tenant_code_uq").on(t.tenantId, t.code),
     check("clinical_services_duration_ck", sql`${t.defaultDurationMinutes} between 5 and 480`),
+    check(
+      "clinical_services_price_ck",
+      sql`${t.priceMinor} is null or ${t.priceMinor} between 0 and 1000000000`,
+    ),
+    check("clinical_services_currency_ck", sql`${t.currency} in ('TRY', 'EUR', 'USD', 'GBP')`),
   ],
 );
 
@@ -1035,6 +1096,55 @@ export const appointmentEvents = kliniva.table(
       foreignColumns: [appointments.tenantId, appointments.id],
     }),
     index("appointment_events_appointment_idx").on(t.tenantId, t.appointmentId, t.createdAt),
+  ],
+);
+
+/**
+ * [SENSITIVE / SAĞLIK VERİSİ] Muayene kaydı — randevuya bağlı klinik kayıt (şikâyet, bulgular, yapılan işlemler,
+ * plan). İçerik AES-256-GCM ile ŞİFRELİ (aad: tenant + randevu + sürüm); audit'e içerik yazılmaz.
+ * YALNIZCA EKLEME: her kaydetme yeni SÜRÜM; önceki sürümler değişmez / silinmez (yasal imha hariç) → tıbbi kayıt
+ * sessizce üzerine yazılmaz. Yazan: randevunun doktoru (patient.health.write); okuyan: patient.health.read.
+ */
+export const clinicalNotes = kliniva.table(
+  "clinical_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    appointmentId: uuid("appointment_id").notNull(),
+    patientId: uuid("patient_id").notNull(),
+    doctorId: uuid("doctor_id").notNull(),
+    version: integer("version").notNull(),
+    contentEncrypted: text("content_encrypted").notNull(),
+    /** Bütünlük özeti (şifreli içeriğin SHA-256'sı) — kurcalama tespiti. */
+    contentHash: text("content_hash").notNull(),
+    createdByUserId: uuid("created_by_user_id").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: "clinical_notes_appointment_fk",
+      columns: [t.tenantId, t.appointmentId],
+      foreignColumns: [appointments.tenantId, appointments.id],
+    }),
+    foreignKey({
+      name: "clinical_notes_patient_fk",
+      columns: [t.tenantId, t.patientId],
+      foreignColumns: [patients.tenantId, patients.id],
+    }),
+    foreignKey({
+      name: "clinical_notes_doctor_fk",
+      columns: [t.tenantId, t.doctorId],
+      foreignColumns: [doctorProfiles.tenantId, doctorProfiles.id],
+    }),
+    foreignKey({
+      name: "clinical_notes_author_fk",
+      columns: [t.tenantId, t.createdByUserId],
+      foreignColumns: [users.tenantId, users.id],
+    }),
+    unique("clinical_notes_version_uq").on(t.tenantId, t.appointmentId, t.version),
+    check("clinical_notes_version_ck", sql`${t.version} >= 1`),
+    check("clinical_notes_hash_ck", sql`${t.contentHash} ~ '^[0-9a-f]{64}$'`),
+    index("clinical_notes_patient_idx").on(t.tenantId, t.patientId, t.createdAt),
   ],
 );
 
@@ -1504,6 +1614,7 @@ export const notificationType = kliniva.enum("notification_type", [
   "LOT_RECALLED",
   "DOCUMENT_INTEGRITY_FAILED",
   "SYSTEM_SECURITY_ALERT",
+  "TASK_ASSIGNED",
 ]);
 export const notificationSeverity = kliniva.enum("notification_severity", [
   "INFO",
@@ -1674,6 +1785,8 @@ export const voiceSessions = kliniva.table(
     status: voiceSessionStatus("status").notNull().default("ACTIVE"),
     language: text("language").notNull().default("tr"),
     transport: text("transport").notNull().default("openai"),
+    /** VOICE: OpenAI Realtime (WebRTC) · CHAT: yazılı sohbet (sunucu tarafı model çağrısı). Değişmez. */
+    channel: text("channel").notNull().default("VOICE"),
     clientSessionId: text("client_session_id"),
     startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
@@ -1690,11 +1803,13 @@ export const voiceSessions = kliniva.table(
     unique("voice_sessions_tenant_id_user_uq").on(t.tenantId, t.id, t.userId),
     check("voice_sessions_language_ck", sql`${t.language} in ('tr', 'en')`),
     check("voice_sessions_transport_ck", sql`${t.transport} in ('openai', 'mock')`),
+    check("voice_sessions_channel_ck", sql`${t.channel} in ('VOICE', 'CHAT')`),
     check(
       "voice_sessions_client_id_ck",
       sql`${t.clientSessionId} is null or length(${t.clientSessionId}) <= 120`,
     ),
     index("voice_sessions_user_active_idx").on(t.tenantId, t.userId, t.status),
+    index("voice_sessions_user_channel_idx").on(t.tenantId, t.userId, t.channel, t.status),
   ],
 );
 
@@ -1789,5 +1904,433 @@ export const pendingAiActions = kliniva.table(
       sql`${t.resultCode} is null or ${t.resultCode} ~ '^[A-Z0-9_]{1,60}$'`,
     ),
     index("pending_ai_actions_session_idx").on(t.tenantId, t.voiceSessionId, t.status),
+  ],
+);
+
+// ---------------------------------------------------------------- Sprint 8: hasta hesabı + kasa
+
+/**
+ * Finans kayıtları DEĞİŞTİRİLEMEZ: yanlış kayıt silinmez / düzeltilmez, gerekçeyle İPTAL edilir (VOIDED) ve yenisi
+ * girilir. DB tetikleyicisi yalnızca ACTIVE → VOIDED geçişine izin verir; DELETE yalnızca yasal imha bağlamında.
+ * Tutarlar kuruş / cent cinsinden tamsayıdır (kayan nokta yok); her kayıt tek para birimindedir.
+ */
+export const financeStatus = kliniva.enum("finance_status", ["ACTIVE", "VOIDED"]);
+export const cashKind = kliniva.enum("cash_kind", ["INCOME", "EXPENSE"]);
+export const paymentMethod = kliniva.enum("payment_method", ["CASH", "CARD", "TRANSFER", "OTHER"]);
+export const chargeSource = kliniva.enum("charge_source", ["APPOINTMENT", "MANUAL"]);
+
+/** Hastaya yansıtılan hizmet bedeli (borç kalemi). Randevu tamamlanınca hizmetin liste fiyatıyla otomatik oluşur. */
+export const patientCharges = kliniva.table(
+  "patient_charges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    branchId: uuid("branch_id").notNull(),
+    patientId: uuid("patient_id").notNull(),
+    appointmentId: uuid("appointment_id"),
+    serviceId: uuid("service_id"),
+    source: chargeSource("source").notNull().default("MANUAL"),
+    description: text("description").notNull(),
+    quantity: integer("quantity").notNull().default(1),
+    unitPriceMinor: integer("unit_price_minor").notNull(),
+    discountMinor: integer("discount_minor").notNull().default(0),
+    totalMinor: integer("total_minor").notNull(),
+    currency: text("currency").notNull().default("TRY"),
+    status: financeStatus("status").notNull().default("ACTIVE"),
+    createdByUserId: uuid("created_by_user_id").notNull(),
+    createdAt: createdAt(),
+    voidedAt: timestamp("voided_at", { withTimezone: true }),
+    voidedByUserId: uuid("voided_by_user_id"),
+    voidReason: text("void_reason"),
+  },
+  (t) => [
+    unique("patient_charges_tenant_id_uq").on(t.tenantId, t.id),
+    foreignKey({
+      name: "patient_charges_branch_fk",
+      columns: [t.tenantId, t.branchId],
+      foreignColumns: [branches.tenantId, branches.id],
+    }),
+    foreignKey({
+      name: "patient_charges_patient_fk",
+      columns: [t.tenantId, t.patientId],
+      foreignColumns: [patients.tenantId, patients.id],
+    }),
+    foreignKey({
+      name: "patient_charges_appointment_fk",
+      columns: [t.tenantId, t.appointmentId],
+      foreignColumns: [appointments.tenantId, appointments.id],
+    }),
+    foreignKey({
+      name: "patient_charges_service_fk",
+      columns: [t.tenantId, t.serviceId],
+      foreignColumns: [clinicalServices.tenantId, clinicalServices.id],
+    }),
+    foreignKey({
+      name: "patient_charges_creator_fk",
+      columns: [t.tenantId, t.createdByUserId],
+      foreignColumns: [users.tenantId, users.id],
+    }),
+    foreignKey({
+      name: "patient_charges_voider_fk",
+      columns: [t.tenantId, t.voidedByUserId],
+      foreignColumns: [users.tenantId, users.id],
+    }),
+    check("patient_charges_quantity_ck", sql`${t.quantity} between 1 and 1000`),
+    check("patient_charges_price_ck", sql`${t.unitPriceMinor} between 0 and 1000000000`),
+    check(
+      "patient_charges_total_ck",
+      sql`${t.discountMinor} >= 0 and ${t.totalMinor} >= 0 and ${t.totalMinor} = ${t.quantity}::bigint * ${t.unitPriceMinor} - ${t.discountMinor}`,
+    ),
+    check("patient_charges_currency_ck", sql`${t.currency} in ('TRY', 'EUR', 'USD', 'GBP')`),
+    check("patient_charges_description_ck", sql`length(${t.description}) between 1 and 200`),
+    check(
+      "patient_charges_void_ck",
+      sql`(${t.status} = 'ACTIVE' and ${t.voidedAt} is null and ${t.voidedByUserId} is null and ${t.voidReason} is null) or (${t.status} = 'VOIDED' and ${t.voidedAt} is not null and ${t.voidedByUserId} is not null and length(${t.voidReason}) between 3 and 300)`,
+    ),
+    check(
+      "patient_charges_source_ck",
+      sql`${t.source} = 'MANUAL' or (${t.appointmentId} is not null and ${t.serviceId} is not null)`,
+    ),
+    // Randevu başına en fazla bir AKTİF otomatik hizmet bedeli (tamamla tekrar denense bile çift borç olmaz).
+    uniqueIndex("patient_charges_auto_uq")
+      .on(t.tenantId, t.appointmentId)
+      .where(sql`source = 'APPOINTMENT' and status = 'ACTIVE'`),
+    index("patient_charges_patient_idx").on(t.tenantId, t.patientId, t.createdAt),
+    index("patient_charges_appointment_idx").on(t.tenantId, t.appointmentId),
+    index("patient_charges_branch_idx").on(t.tenantId, t.branchId, t.createdAt),
+  ],
+);
+
+export const cashCategories = kliniva.table(
+  "cash_categories",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    kind: cashKind("kind").notNull(),
+    active: boolean("active").notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    unique("cash_categories_tenant_id_uq").on(t.tenantId, t.id),
+    unique("cash_categories_name_uq").on(t.tenantId, t.kind, t.name),
+    check("cash_categories_name_ck", sql`length(${t.name}) between 2 and 60`),
+  ],
+);
+
+/**
+ * Kasa hareketi. Hasta tahsilatı = INCOME + patient_id (hasta bakiyesini düşer). Diğer gelir / giderler hastasızdır;
+ * gider hiçbir hastaya bağlanamaz.
+ */
+export const cashTransactions = kliniva.table(
+  "cash_transactions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    branchId: uuid("branch_id").notNull(),
+    kind: cashKind("kind").notNull(),
+    categoryId: uuid("category_id"),
+    method: paymentMethod("method").notNull(),
+    amountMinor: integer("amount_minor").notNull(),
+    currency: text("currency").notNull().default("TRY"),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    patientId: uuid("patient_id"),
+    appointmentId: uuid("appointment_id"),
+    description: text("description"),
+    status: financeStatus("status").notNull().default("ACTIVE"),
+    createdByUserId: uuid("created_by_user_id").notNull(),
+    createdAt: createdAt(),
+    voidedAt: timestamp("voided_at", { withTimezone: true }),
+    voidedByUserId: uuid("voided_by_user_id"),
+    voidReason: text("void_reason"),
+  },
+  (t) => [
+    unique("cash_transactions_tenant_id_uq").on(t.tenantId, t.id),
+    foreignKey({
+      name: "cash_transactions_branch_fk",
+      columns: [t.tenantId, t.branchId],
+      foreignColumns: [branches.tenantId, branches.id],
+    }),
+    foreignKey({
+      name: "cash_transactions_category_fk",
+      columns: [t.tenantId, t.categoryId],
+      foreignColumns: [cashCategories.tenantId, cashCategories.id],
+    }),
+    foreignKey({
+      name: "cash_transactions_patient_fk",
+      columns: [t.tenantId, t.patientId],
+      foreignColumns: [patients.tenantId, patients.id],
+    }),
+    foreignKey({
+      name: "cash_transactions_appointment_fk",
+      columns: [t.tenantId, t.appointmentId],
+      foreignColumns: [appointments.tenantId, appointments.id],
+    }),
+    foreignKey({
+      name: "cash_transactions_creator_fk",
+      columns: [t.tenantId, t.createdByUserId],
+      foreignColumns: [users.tenantId, users.id],
+    }),
+    foreignKey({
+      name: "cash_transactions_voider_fk",
+      columns: [t.tenantId, t.voidedByUserId],
+      foreignColumns: [users.tenantId, users.id],
+    }),
+    check("cash_transactions_amount_ck", sql`${t.amountMinor} between 1 and 1000000000`),
+    check("cash_transactions_currency_ck", sql`${t.currency} in ('TRY', 'EUR', 'USD', 'GBP')`),
+    check(
+      "cash_transactions_description_ck",
+      sql`${t.description} is null or length(${t.description}) <= 300`,
+    ),
+    check(
+      "cash_transactions_patient_ck",
+      sql`(${t.kind} = 'INCOME' or ${t.patientId} is null) and (${t.appointmentId} is null or ${t.patientId} is not null)`,
+    ),
+    check(
+      "cash_transactions_void_ck",
+      sql`(${t.status} = 'ACTIVE' and ${t.voidedAt} is null and ${t.voidedByUserId} is null and ${t.voidReason} is null) or (${t.status} = 'VOIDED' and ${t.voidedAt} is not null and ${t.voidedByUserId} is not null and length(${t.voidReason}) between 3 and 300)`,
+    ),
+    index("cash_transactions_occurred_idx").on(t.tenantId, t.occurredAt),
+    index("cash_transactions_patient_idx").on(t.tenantId, t.patientId),
+    index("cash_transactions_branch_idx").on(t.tenantId, t.branchId, t.occurredAt),
+  ],
+);
+
+// ---------------------------------------------------------------- Sprint 8.2: muayene dosyaları
+
+/**
+ * Muayeneye eklenen dosyalar (tahlil sonucu, fotoğraf, PDF) — [HEALTH_SPECIAL_CATEGORY]. İçerik özel depoda
+ * şifreli (anahtar PII içermez); dosya adı da şifreli. Silinmez: gerekçeyle geçersiz kılınır (VOIDED).
+ */
+export const clinicalAttachments = kliniva.table(
+  "clinical_attachments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    appointmentId: uuid("appointment_id").notNull(),
+    patientId: uuid("patient_id").notNull(),
+    doctorId: uuid("doctor_id").notNull(),
+    storageKey: text("storage_key").notNull(),
+    fileNameEncrypted: text("file_name_encrypted").notNull(),
+    mimeType: text("mime_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    sha256: text("sha256").notNull(),
+    status: financeStatus("status").notNull().default("ACTIVE"),
+    createdByUserId: uuid("created_by_user_id").notNull(),
+    createdAt: createdAt(),
+    voidedAt: timestamp("voided_at", { withTimezone: true }),
+    voidedByUserId: uuid("voided_by_user_id"),
+    voidReason: text("void_reason"),
+  },
+  (t) => [
+    unique("clinical_attachments_tenant_id_uq").on(t.tenantId, t.id),
+    unique("clinical_attachments_storage_key_uq").on(t.storageKey),
+    foreignKey({
+      name: "clinical_attachments_appointment_fk",
+      columns: [t.tenantId, t.appointmentId],
+      foreignColumns: [appointments.tenantId, appointments.id],
+    }),
+    foreignKey({
+      name: "clinical_attachments_patient_fk",
+      columns: [t.tenantId, t.patientId],
+      foreignColumns: [patients.tenantId, patients.id],
+    }),
+    foreignKey({
+      name: "clinical_attachments_doctor_fk",
+      columns: [t.tenantId, t.doctorId],
+      foreignColumns: [doctorProfiles.tenantId, doctorProfiles.id],
+    }),
+    foreignKey({
+      name: "clinical_attachments_author_fk",
+      columns: [t.tenantId, t.createdByUserId],
+      foreignColumns: [users.tenantId, users.id],
+    }),
+    foreignKey({
+      name: "clinical_attachments_voider_fk",
+      columns: [t.tenantId, t.voidedByUserId],
+      foreignColumns: [users.tenantId, users.id],
+    }),
+    check(
+      "clinical_attachments_mime_ck",
+      sql`${t.mimeType} in ('application/pdf', 'image/png', 'image/jpeg', 'image/webp')`,
+    ),
+    check("clinical_attachments_size_ck", sql`${t.sizeBytes} between 1 and 5242880`),
+    check("clinical_attachments_sha_ck", sql`${t.sha256} ~ '^[0-9a-f]{64}$'`),
+    check(
+      "clinical_attachments_key_ck",
+      sql`${t.storageKey} ~ '^tenant/[0-9a-f-]{36}/clinical/[0-9a-f-]{36}[.]bin$'`,
+    ),
+    check(
+      "clinical_attachments_void_ck",
+      sql`(${t.status} = 'ACTIVE' and ${t.voidedAt} is null and ${t.voidedByUserId} is null and ${t.voidReason} is null) or (${t.status} = 'VOIDED' and ${t.voidedAt} is not null and ${t.voidedByUserId} is not null and length(${t.voidReason}) between 3 and 300)`,
+    ),
+    index("clinical_attachments_appointment_idx").on(t.tenantId, t.appointmentId),
+    index("clinical_attachments_patient_idx").on(t.tenantId, t.patientId, t.createdAt),
+  ],
+);
+
+// ---------------------------------------------------------------- Sprint 8.3: hasta görevleri
+
+export const taskType = kliniva.enum("task_type", [
+  "OUTGOING_CALL",
+  "INCOMING_CALL",
+  "EMAIL",
+  "SMS",
+  "MEETING",
+  "OTHER",
+]);
+export const taskStatus = kliniva.enum("task_status", ["OPEN", "DONE", "UNREACHABLE", "CANCELLED"]);
+
+/**
+ * Hastaya bağlı takip işi (arama, e-posta, toplantı…) — bir personele atanır, zamanı ve sonucu izlenir.
+ * Başlık / not / sonuç serbest metindir ve sağlık bilgisi içerebilir (ör. "patoloji sonucunu paylaş") → şifreli.
+ * Silinmez; iptal edilir.
+ */
+export const patientTasks = kliniva.table(
+  "patient_tasks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    branchId: uuid("branch_id").notNull(),
+    patientId: uuid("patient_id").notNull(),
+    appointmentId: uuid("appointment_id"),
+    taskType: taskType("task_type").notNull(),
+    titleEncrypted: text("title_encrypted").notNull(),
+    notesEncrypted: text("notes_encrypted"),
+    dueAt: timestamp("due_at", { withTimezone: true }).notNull(),
+    assignedUserId: uuid("assigned_user_id").notNull(),
+    status: taskStatus("status").notNull().default("OPEN"),
+    resultEncrypted: text("result_encrypted"),
+    createdByUserId: uuid("created_by_user_id").notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    completedByUserId: uuid("completed_by_user_id"),
+  },
+  (t) => [
+    unique("patient_tasks_tenant_id_uq").on(t.tenantId, t.id),
+    foreignKey({
+      name: "patient_tasks_branch_fk",
+      columns: [t.tenantId, t.branchId],
+      foreignColumns: [branches.tenantId, branches.id],
+    }),
+    foreignKey({
+      name: "patient_tasks_patient_fk",
+      columns: [t.tenantId, t.patientId],
+      foreignColumns: [patients.tenantId, patients.id],
+    }),
+    foreignKey({
+      name: "patient_tasks_appointment_fk",
+      columns: [t.tenantId, t.appointmentId],
+      foreignColumns: [appointments.tenantId, appointments.id],
+    }),
+    foreignKey({
+      name: "patient_tasks_assignee_fk",
+      columns: [t.tenantId, t.assignedUserId],
+      foreignColumns: [users.tenantId, users.id],
+    }),
+    foreignKey({
+      name: "patient_tasks_creator_fk",
+      columns: [t.tenantId, t.createdByUserId],
+      foreignColumns: [users.tenantId, users.id],
+    }),
+    foreignKey({
+      name: "patient_tasks_completer_fk",
+      columns: [t.tenantId, t.completedByUserId],
+      foreignColumns: [users.tenantId, users.id],
+    }),
+    check(
+      "patient_tasks_completion_ck",
+      sql`(${t.status} = 'OPEN' and ${t.completedAt} is null and ${t.completedByUserId} is null) or (${t.status} <> 'OPEN' and ${t.completedAt} is not null and ${t.completedByUserId} is not null)`,
+    ),
+    index("patient_tasks_assignee_idx").on(t.tenantId, t.assignedUserId, t.status, t.dueAt),
+    index("patient_tasks_patient_idx").on(t.tenantId, t.patientId, t.dueAt),
+    index("patient_tasks_branch_idx").on(t.tenantId, t.branchId, t.status, t.dueAt),
+  ],
+);
+
+// ---------------------------------------------------------------- Sprint 8.4: tahliller
+
+/**
+ * Tahlil tipi (ör. Hemogram) ve parametreleri (ad, birim, referans aralığı). Parametre listesi JSON'dur; sonuç
+ * girilirken o anki parametre / aralık sonuca KOPYALANIR (tip sonradan değişse de eski sonuç değişmez).
+ */
+export const labPanels = kliniva.table(
+  "lab_panels",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    parameters: jsonb("parameters").notNull(),
+    active: boolean("active").notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    unique("lab_panels_tenant_id_uq").on(t.tenantId, t.id),
+    unique("lab_panels_name_uq").on(t.tenantId, t.name),
+    check("lab_panels_name_ck", sql`length(${t.name}) between 2 and 80`),
+    check("lab_panels_parameters_ck", sql`jsonb_typeof(${t.parameters}) = 'array'`),
+  ],
+);
+
+/** [HEALTH_SPECIAL_CATEGORY] Hastanın tahlil sonucu — değerler şifreli; düzeltilmez, geçersiz kılınır. */
+export const labResults = kliniva.table(
+  "lab_results",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    patientId: uuid("patient_id").notNull(),
+    panelId: uuid("panel_id").notNull(),
+    appointmentId: uuid("appointment_id"),
+    sampleDate: date("sample_date").notNull(),
+    valuesEncrypted: text("values_encrypted").notNull(),
+    /** Referans dışı değer sayısı (liste rozetleri için; değer içermez). */
+    abnormalCount: integer("abnormal_count").notNull().default(0),
+    status: financeStatus("status").notNull().default("ACTIVE"),
+    createdByUserId: uuid("created_by_user_id").notNull(),
+    createdAt: createdAt(),
+    voidedAt: timestamp("voided_at", { withTimezone: true }),
+    voidedByUserId: uuid("voided_by_user_id"),
+    voidReason: text("void_reason"),
+  },
+  (t) => [
+    unique("lab_results_tenant_id_uq").on(t.tenantId, t.id),
+    foreignKey({
+      name: "lab_results_patient_fk",
+      columns: [t.tenantId, t.patientId],
+      foreignColumns: [patients.tenantId, patients.id],
+    }),
+    foreignKey({
+      name: "lab_results_panel_fk",
+      columns: [t.tenantId, t.panelId],
+      foreignColumns: [labPanels.tenantId, labPanels.id],
+    }),
+    foreignKey({
+      name: "lab_results_appointment_fk",
+      columns: [t.tenantId, t.appointmentId],
+      foreignColumns: [appointments.tenantId, appointments.id],
+    }),
+    foreignKey({
+      name: "lab_results_creator_fk",
+      columns: [t.tenantId, t.createdByUserId],
+      foreignColumns: [users.tenantId, users.id],
+    }),
+    foreignKey({
+      name: "lab_results_voider_fk",
+      columns: [t.tenantId, t.voidedByUserId],
+      foreignColumns: [users.tenantId, users.id],
+    }),
+    check("lab_results_abnormal_ck", sql`${t.abnormalCount} >= 0`),
+    check(
+      "lab_results_void_ck",
+      sql`(${t.status} = 'ACTIVE' and ${t.voidedAt} is null and ${t.voidedByUserId} is null and ${t.voidReason} is null) or (${t.status} = 'VOIDED' and ${t.voidedAt} is not null and ${t.voidedByUserId} is not null and length(${t.voidReason}) between 3 and 300)`,
+    ),
+    index("lab_results_patient_idx").on(t.tenantId, t.patientId, t.sampleDate),
   ],
 );

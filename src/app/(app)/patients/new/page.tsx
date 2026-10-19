@@ -3,6 +3,7 @@ import { requireUser } from "@/server/auth/guards";
 import { hasPermission } from "@/server/auth/authz";
 import { accessibleBranchOptions } from "@/server/services/org";
 import { listTemplates } from "@/server/services/documents";
+import { listPatientLookups } from "@/server/services/patient-lookups";
 import { Forbidden } from "@/components/forbidden";
 import { PageHeader } from "@/components/ui";
 import { PatientWizard } from "@/components/patient-wizard";
@@ -14,6 +15,7 @@ export default async function NewPatientPage() {
   const ctx = await requireUser();
   if (!hasPermission(ctx, "patient.create")) return <Forbidden />;
   const branches = hasPermission(ctx, "branch.read") ? await accessibleBranchOptions(ctx) : [];
+  const lookups = await listPatientLookups(ctx, { activeOnly: true });
   const canDocuments =
     hasPermission(ctx, "patient.document.create") &&
     hasPermission(ctx, "patient.document.present") &&
@@ -34,6 +36,7 @@ export default async function NewPatientPage() {
         defaultBranchId={branches.length === 1 ? branches[0]!.id : undefined}
         hasDisclosureTemplate={published.includes("KVKK_DISCLOSURE")}
         hasConsentTemplate={published.includes("EXPLICIT_CONSENT")}
+        lookups={lookups}
       />
     </section>
   );

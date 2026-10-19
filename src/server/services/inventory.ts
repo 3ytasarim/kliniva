@@ -1210,7 +1210,11 @@ export type LowStockRow = StockByLocationRow;
  * (usable <= minimum). Ayrıca görünür lokasyonlarda kullanılabilir toplamı 0 olan (tükenen) aktif ürünler.
  * Lot takipli üründe SKT'si geçmiş / geri çağrılmış / pasif lotlar fiziksel stoktur ama kullanılabilir değildir.
  */
-export async function getLowStockItems(ctx: AuthContext, input: unknown = {}) {
+export async function getLowStockItems(
+  ctx: AuthContext,
+  input: unknown = {},
+  opts: { audit?: boolean } = {},
+) {
   requirePermission(ctx, "inventory.low_stock.read");
   const data = parseInput(getInventoryInput, input);
   return tenantQuery(ctx, async (scope) => {
@@ -1238,22 +1242,28 @@ export async function getLowStockItems(ctx: AuthContext, input: unknown = {}) {
         ),
       )
       .orderBy(asc(inventoryItems.name));
-    await writeAudit(scope, actorOf(ctx), {
-      action: "LOW_STOCK_VIEWED",
-      entityType: "inventory",
-      entityId: null,
-      metadata: { lowCount: low.length, outOfStockCount: out.length, branchId: data.branchId ?? null },
-    });
+    // Rapor görüntüleme audit'lenir; ana paneldeki yalnızca SAYI özeti (audit: false) her sayfa açılışında audit üretmez.
+    if (opts.audit !== false)
+      await writeAudit(scope, actorOf(ctx), {
+        action: "LOW_STOCK_VIEWED",
+        entityType: "inventory",
+        entityId: null,
+        metadata: { lowCount: low.length, outOfStockCount: out.length, branchId: data.branchId ?? null },
+      });
     return { low, outOfStock: out };
   });
 }
 
 /** /inventory panel kartları (kapsam içi). */
-export async function getInventoryDashboard(ctx: AuthContext, input: unknown = {}) {
+export async function getInventoryDashboard(
+  ctx: AuthContext,
+  input: unknown = {},
+  opts: { audit?: boolean } = {},
+) {
   requirePermission(ctx, "inventory.read");
   const data = parseInput(getInventoryInput, input);
   const canLow = hasPermission(ctx, "inventory.low_stock.read");
-  const lowData = canLow ? await getLowStockItems(ctx, data) : { low: [], outOfStock: [] };
+  const lowData = canLow ? await getLowStockItems(ctx, data, opts) : { low: [], outOfStock: [] };
   return tenantQuery(ctx, async (scope) => {
     const [p] = await scope.tx
       .select({ tz: clinicProfiles.timezone })

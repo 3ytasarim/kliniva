@@ -2,12 +2,16 @@ import "server-only";
 import { and, asc, desc, eq, lte, sql } from "drizzle-orm";
 import {
   appointments,
+  branches,
   clinicalServices,
   inventoryItems,
   inventoryLocations,
   outboxEvents,
+  patientTasks,
   stockLots,
 } from "@/server/db/schema";
+import { DEFAULT_TIMEZONE } from "@/lib/time";
+import { TASK_TYPE_LABELS } from "@/types/tasks";
 import { AppError, isAppError } from "@/server/errors";
 import { writeAudit, type AuditAction, type AuditActor } from "@/server/audit/audit";
 import { actorOf, requirePermission, type AuthContext } from "@/server/auth/authz";
@@ -69,6 +73,7 @@ export const OUTBOX_EVENT_TYPES = [
   "LOT_EXPIRED",
   "LOT_RECALLED",
   "DOCUMENT_INTEGRITY_FAILED",
+  "TASK_ASSIGNED",
 ] as const;
 export type OutboxEventType = (typeof OUTBOX_EVENT_TYPES)[number];
 export type OutboxPayload = Record<string, string | number | boolean | null>;
@@ -368,6 +373,14 @@ async function lotInfo(scope: TenantScope, lotId: string) {
   return r ?? null;
 }
 
+async function branchTimezone(scope: TenantScope, branchId: string): Promise<string | null> {
+  const [b] = await scope.tx
+    .select({ tz: branches.timezone })
+    .from(branches)
+    .where(tenantWhere(branches, scope, eq(branches.id, branchId)));
+  return b?.tz ?? null;
+}
+
 const dmy = (d: string | null) => (d ? d.split("-").reverse().join(".") : "—");
 const qty = (v: string | number | boolean | null | undefined) => String(Number(v ?? 0));
 
@@ -537,6 +550,33 @@ async function buildDraft(scope: TenantScope, row: Row): Promise<Draft | null> {
       branchId: str(p, "branchId"),
       dedupBase: `doc-integrity:${row.aggregateId}:${str(p, "part") ?? "x"}`,
       recipients: { type: "DOCUMENT_INTEGRITY_FAILED" },
+    };
+  }
+  if (type === "TASK_ASSIGNED") {
+    const [t] = await scope.tx
+      .select({
+        id: patientTasks.id,
+        branchId: patientTasks.branchId,
+        dueAt: patientTasks.dueAt,
+        taskType: patientTasks.taskType,
+        status: patientTasks.status,
+        assignedUserId: patientTasks.assignedUserId,
+      })
+      .from(patientTasks)
+      .where(tenantWhere(patientTasks, scope, eq(patientTasks.id, row.aggregateId)));
+    // Görev imha edildiyse / kapandıysa / yeniden atandıysa (bu olay eskidi) bildirim yok.
+    if (!t || t.status !== "OPEN" || t.assignedUserId !== str(p, "assigneeUserId")) return null;
+    const tz = (await branchTimezone(scope, t.branchId)) ?? DEFAULT_TIMEZONE;
+    return {
+      type: "TASK_ASSIGNED",
+      title: TYPE_LABELS.TASK_ASSIGNED,
+      // Görev başlığı (sağlık bilgisi içerebilir) ve hasta adı YOK — yalnızca zaman ve tür.
+      body: `${whenLabel(t.dueAt.toISOString(), tz)} · ${TASK_TYPE_LABELS[t.taskType]}`,
+      entityType: "patient_task",
+      entityId: t.id,
+      branchId: t.branchId,
+      dedupBase: `task-assigned:${t.id}:${row.id}`,
+      recipients: { type: "TASK_ASSIGNED", userIds: [t.assignedUserId], actorUserId: str(p, "actorUserId") },
     };
   }
   throw new Error("UNKNOWN_EVENT_TYPE");

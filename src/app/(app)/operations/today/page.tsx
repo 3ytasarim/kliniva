@@ -7,12 +7,12 @@ import { accessibleBranchOptions } from "@/server/services/org";
 import { appointmentStatusAction, cancelAppointmentAction } from "@/app/actions/appointments";
 import { ActionForm, InlineAction } from "@/components/action-form";
 import { Forbidden } from "@/components/forbidden";
-import { PageHeader } from "@/components/ui";
+import { Avatar, PageHeader, SectionCard, StatCard, type IconName, type Tone } from "@/components/ui";
 import { AppointmentStatusBadge, formatLocalDate } from "@/components/appointment-ui";
 import { LiveRefresh } from "@/components/notification-bell";
 import type { AppointmentStatus } from "@/types/appointments";
 
-export const metadata: Metadata = { title: "Bugünkü operasyon" };
+export const metadata: Metadata = { title: "Bugünkü muayeneler" };
 
 /**
  * Klinik operasyon ekranı — bugünün randevuları, randevu durum makinesine göre (ikinci bir durum sistemi YOK).
@@ -20,12 +20,18 @@ export const metadata: Metadata = { title: "Bugünkü operasyon" };
  * resepsiyon → giriş (check-in) / gelmedi / iptal; doktor → başlat / tamamla. Sunucu her geçişi yeniden doğrular.
  * Gerçek zamanlı: bildirim sinyali (SSE) + periyodik yenileme.
  */
-const GROUPS: { key: string; title: string; statuses: AppointmentStatus[] }[] = [
-  { key: "expected", title: "Beklenen", statuses: ["PENDING_APPROVAL", "BOOKED", "CONFIRMED"] },
-  { key: "arrived", title: "Geldi", statuses: ["CHECKED_IN"] },
-  { key: "in-progress", title: "İşlemde", statuses: ["IN_PROGRESS"] },
-  { key: "completed", title: "Tamamlandı", statuses: ["COMPLETED"] },
-  { key: "no-show", title: "Gelmedi", statuses: ["NO_SHOW"] },
+const GROUPS: { key: string; title: string; statuses: AppointmentStatus[]; icon: IconName; tone: Tone }[] = [
+  {
+    key: "expected",
+    title: "Beklenen",
+    statuses: ["PENDING_APPROVAL", "BOOKED", "CONFIRMED"],
+    icon: "calendar",
+    tone: "brand",
+  },
+  { key: "arrived", title: "Geldi", statuses: ["CHECKED_IN"], icon: "clock", tone: "amber" },
+  { key: "in-progress", title: "Muayenede", statuses: ["IN_PROGRESS"], icon: "exam", tone: "sky" },
+  { key: "completed", title: "Tamamlandı", statuses: ["COMPLETED"], icon: "check", tone: "green" },
+  { key: "no-show", title: "Gelmedi", statuses: ["NO_SHOW"], icon: "alert", tone: "red" },
 ];
 
 /** "Gelmedi" yalnızca randevu saati geldikten sonra (sunucu da ayrıca doğrular). */
@@ -122,7 +128,7 @@ export default async function OperationsTodayPage({
     <section className="grid gap-6">
       <LiveRefresh intervalMs={20_000} />
       <PageHeader
-        title="Bugünkü operasyon"
+        title="Bugünkü muayeneler"
         description={`${formatLocalDate(today)} · ${items.length - cancelledCount} randevu${cancelledCount ? ` · ${cancelledCount} iptal` : ""}`}
       />
       {branches.length > 1 ? (
@@ -146,68 +152,83 @@ export default async function OperationsTodayPage({
         </form>
       ) : null}
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5" aria-label="Durum özeti">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5" aria-label="Durum özeti">
         {GROUPS.map((g) => (
-          <a key={g.key} href={`#${g.key}`} className="card hover:border-brand-300">
-            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{g.title}</p>
-            <p className="mt-2 text-3xl font-bold tabular-nums" data-testid={`ops-count-${g.key}`}>
-              {items.filter((i) => g.statuses.includes(i.status)).length}
-            </p>
-          </a>
+          <StatCard
+            key={g.key}
+            label={g.title}
+            value={items.filter((i) => g.statuses.includes(i.status)).length}
+            icon={g.icon}
+            tone={g.tone}
+            href={`#${g.key}`}
+            testId={`ops-count-${g.key}`}
+          />
         ))}
       </div>
 
       {GROUPS.map((g) => {
         const rows = items.filter((i) => g.statuses.includes(i.status));
         return (
-          <div key={g.key} id={g.key} className="card overflow-x-auto p-0" data-testid={`ops-group-${g.key}`}>
-            <h2 className="px-5 pt-5 font-semibold">
-              {g.title} <span className="text-sm font-normal text-slate-500">({rows.length})</span>
-            </h2>
-            {rows.length === 0 ? (
-              <p className="px-5 pb-5 pt-2 text-sm text-slate-500">Kayıt yok.</p>
-            ) : (
-              <table className="table mt-3">
-                <thead>
-                  <tr>
-                    <th scope="col">Saat</th>
-                    <th scope="col">Hasta</th>
-                    <th scope="col">Doktor</th>
-                    <th scope="col">Oda</th>
-                    <th scope="col">Hizmet</th>
-                    <th scope="col">Durum</th>
-                    <th scope="col">
-                      <span className="sr-only">İşlem</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((a) => (
-                    <tr key={a.id} data-testid="ops-row">
-                      <td className="whitespace-nowrap font-medium tabular-nums">
-                        {a.localStart}–{a.localEnd}
-                      </td>
-                      <td>
-                        <Link href={`/appointments/${a.id}`} className="hover:text-brand-700">
-                          {a.patient.name}
-                        </Link>
-                      </td>
-                      <td>{a.doctor.name}</td>
-                      <td>{a.room?.name ?? "—"}</td>
-                      <td>{a.service?.name ?? "—"}</td>
-                      <td>
-                        <AppointmentStatusBadge status={a.status} />
-                      </td>
-                      <td className="whitespace-nowrap text-right">
-                        <div className="inline-flex flex-wrap items-start justify-end gap-2">
-                          {actionsFor(a)}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+          <div key={g.key} id={g.key} className="min-w-0 scroll-mt-24" data-testid={`ops-group-${g.key}`}>
+            <SectionCard
+              title={g.title}
+              action={<span className="badge badge-gray">{rows.length}</span>}
+              flush
+              className="overflow-hidden"
+            >
+              {rows.length === 0 ? (
+                <p className="border-t border-line px-5 py-4 text-sm text-slate-500 dark:border-line-dark">
+                  Kayıt yok.
+                </p>
+              ) : (
+                <div className="overflow-x-auto border-t border-line dark:border-line-dark">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th scope="col">Saat</th>
+                        <th scope="col">Hasta</th>
+                        <th scope="col">Doktor</th>
+                        <th scope="col">Oda</th>
+                        <th scope="col">Hizmet</th>
+                        <th scope="col">Durum</th>
+                        <th scope="col">
+                          <span className="sr-only">İşlem</span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((a) => (
+                        <tr key={a.id} data-testid="ops-row">
+                          <td className="whitespace-nowrap font-medium tabular-nums">
+                            {a.localStart}–{a.localEnd}
+                          </td>
+                          <td>
+                            <Link
+                              href={`/appointments/${a.id}`}
+                              className="inline-flex items-center gap-2.5 font-medium hover:text-brand-700 dark:hover:text-brand-300"
+                            >
+                              <Avatar name={a.patient.name} size="sm" />
+                              {a.patient.name}
+                            </Link>
+                          </td>
+                          <td>{a.doctor.name}</td>
+                          <td>{a.room?.name ?? "—"}</td>
+                          <td>{a.service?.name ?? "—"}</td>
+                          <td>
+                            <AppointmentStatusBadge status={a.status} />
+                          </td>
+                          <td className="whitespace-nowrap text-right">
+                            <div className="inline-flex flex-wrap items-start justify-end gap-2">
+                              {actionsFor(a)}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </SectionCard>
           </div>
         );
       })}

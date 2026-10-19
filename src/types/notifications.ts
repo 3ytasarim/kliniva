@@ -1,6 +1,6 @@
 /** Bildirim merkezi — istemci ve sunucunun paylaştığı tipler (çalışma zamanı kodu yok). */
 export type NotificationSeverityCode = "INFO" | "SUCCESS" | "WARNING" | "CRITICAL";
-export type NotificationCategoryCode = "appointments" | "inventory" | "security";
+export type NotificationCategoryCode = "appointments" | "inventory" | "security" | "tasks";
 
 export type NotificationView = {
   id: string;

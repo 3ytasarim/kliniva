@@ -114,7 +114,7 @@ export default async function ClinicSettingsPage() {
             defaultValue={p.voicePrivacyMode}
             options={[
               { value: "DISCREET", label: "Ölçülü (hasta adlarını mümkün olduğunca söylemez)" },
-              { value: "STANDARD", label: "Standart (yetkili kullanıcıya operasyon bilgisi)" },
+              { value: "STANDARD", label: "Standart (yetkili kullanıcıya randevu bilgisi)" },
             ]}
           />
           <SelectField

@@ -1,13 +1,24 @@
 import "server-only";
-import type { DuplicateCandidate } from "@/types/patients";
+import {
+  BLOOD_TYPES,
+  HABIT_OPTIONS,
+  SOCIAL_SECURITY_OPTIONS,
+  type DuplicateCandidate,
+  type Habit,
+  type HealthProfile,
+  type PatientSegment,
+  type SocialSecurity,
+} from "@/types/patients";
+import { assertLookup } from "@/server/services/patient-lookups";
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, ilike, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import {
   auditLogs,
   branches,
   clinicProfiles,
   patientBranches,
+  patientLookups,
   patients,
   tenants,
   users,
@@ -27,6 +38,7 @@ import { tenantQuery, tenantWhere, type TenantScope } from "@/server/tenant/tena
 import { emailSchema, nameSchema, uuidSchema } from "@/server/validation";
 import { parseInput } from "@/server/services/parse";
 import { maskPhoneNumber, normalizeEmailAddress, normalizePhone } from "@/lib/phone";
+import { DEFAULT_TIMEZONE, dateInZone, zonedDateTimeToUtc } from "@/lib/time";
 
 /**
  * Hasta CRM servisi.
@@ -42,6 +54,11 @@ import { maskPhoneNumber, normalizeEmailAddress, normalizePhone } from "@/lib/ph
  */
 const notesAad = (tenantId: string, patientId: string) => `patient.notes:${tenantId}:${patientId}`;
 const nationalIdAad = (tenantId: string, patientId: string) => `patient.national_id:${tenantId}:${patientId}`;
+const healthProfileAad = (tenantId: string, patientId: string) =>
+  `patient.health_profile:${tenantId}:${patientId}`;
+/** "" → null (alanı temizle), undefined → değişmez. */
+const clearable = (v: unknown) => (typeof v === "string" && v.trim() === "" ? null : v);
+const checkbox = (v: unknown) => (v === undefined ? undefined : v === true || v === "on" || v === "true");
 
 const blank = (v: unknown) => (typeof v === "string" && v.trim() === "" ? undefined : v);
 const optText = (max: number) => z.preprocess(blank, z.string().trim().max(max).optional());
@@ -83,7 +100,39 @@ const patientFields = {
     z.string().trim().refine(isValidTurkishNationalId, "invalid national id").optional(),
   ),
   notes: z.preprocess(blank, z.string().max(10_000).optional()),
+  // Sprint 8.1: kaynak / sigorta / yönlendiren / SMS izni
+  sourceId: z.preprocess(clearable, uuidSchema.nullable().optional()),
+  insurerId: z.preprocess(clearable, uuidSchema.nullable().optional()),
+  socialSecurity: z.preprocess(
+    clearable,
+    z
+      .enum(SOCIAL_SECURITY_OPTIONS.map((o) => o.value) as [SocialSecurity, ...SocialSecurity[]])
+      .nullable()
+      .optional(),
+  ),
+  referral: z.preprocess(clearable, z.string().trim().max(120).nullable().optional()),
+  smsAllowed: z.preprocess(checkbox, z.boolean().optional()),
 };
+
+const habit = z.preprocess(
+  clearable,
+  z
+    .enum(HABIT_OPTIONS.map((o) => o.value) as [Habit, ...Habit[]])
+    .nullable()
+    .optional(),
+);
+const healthText = z.preprocess(
+  (v) => (v === undefined || v === null ? "" : v),
+  z.string().trim().max(2000, "En fazla 2000 karakter."),
+);
+export const healthProfileSchema = z.object({
+  bloodType: z.preprocess(clearable, z.enum(BLOOD_TYPES).nullable().optional()),
+  allergies: healthText,
+  chronicConditions: healthText,
+  medications: healthText,
+  smoking: habit,
+  alcohol: habit,
+});
 
 /** Geriye uyumluluk: eski istemciler "branchId" gönderebilir → primaryBranchId. */
 const withBranchAlias = (v: unknown) => {
@@ -114,6 +163,13 @@ export type PatientListItem = {
   hasPendingDocuments: boolean;
   active: boolean;
   updatedAt: Date;
+  /** Sprint 8.1 — liste zenginleştirme (randevular kullanıcının şube kapsamında sayılır). */
+  sourceName: string | null;
+  lastVisitAt: Date | null;
+  visitCount: number;
+  nextAppointmentAt: Date | null;
+  /** Yalnızca billing.read yetkisinde; TRY bakiye (kuruş), diğer para birimleri ayrıca. */
+  balanceMinor?: number;
 };
 
 export type PatientDetail = {
@@ -142,8 +198,15 @@ export type PatientDetail = {
   privacyStatus: PrivacyStatus;
   createdAt: Date;
   updatedAt: Date;
+  sourceId: string | null;
+  sourceName: string | null;
+  insurerId: string | null;
+  insurerName: string | null;
+  socialSecurity: SocialSecurity | null;
+  referral: string | null;
+  smsAllowed: boolean;
   /** Yalnızca patient.health.read yetkisinde dolu; aksi halde alan hiç gönderilmez. */
-  health?: { notes: string | null };
+  health?: { notes: string | null; profile: HealthProfile | null; profileIntegrityError?: boolean };
 };
 
 /** Geriye uyumluluk (Sprint 0 testleri / ekranları). */
@@ -348,7 +411,142 @@ export type PatientListOptions = {
   status?: "active" | "inactive" | "all";
   page?: number;
   limit?: number;
+  segment?: PatientSegment;
+  sourceId?: string;
+  insurerId?: string;
 };
+
+const uuidList = (ids: Iterable<string>) =>
+  sql.join(
+    [...ids].map((i) => sql`${i}::uuid`),
+    sql`, `,
+  );
+
+/**
+ * Randevu / finans alt sorguları için şube koşulu (alias'lı tablo). Kiracı geneli kullanıcıda koşul yok.
+ * Şube kapsamlı kullanıcı yalnızca kendi şubelerindeki randevu ve hareketlerle hesaplanır.
+ */
+function aliasBranchScope(ctx: AuthContext, alias: string): SQL {
+  if (ctx.branchScope.all) return sql`true`;
+  if (!ctx.branchScope.branchIds.size) return sql`false`;
+  return sql`${sql.raw(alias)}.branch_id in (${uuidList(ctx.branchScope.branchIds)})`;
+}
+
+/** Hastanın tamamlanmış ziyaretleri (kapsam içi). Dış tablo AÇIKÇA kliniva.patients. */
+const visitsOf = (ctx: AuthContext) => sql`(select count(*) from kliniva.appointments va
+  where va.tenant_id = kliniva.patients.tenant_id and va.patient_id = kliniva.patients.id
+    and va.status = 'COMPLETED' and ${aliasBranchScope(ctx, "va")})`;
+const lastVisitOf = (ctx: AuthContext) => sql`(select max(va.scheduled_start) from kliniva.appointments va
+  where va.tenant_id = kliniva.patients.tenant_id and va.patient_id = kliniva.patients.id
+    and va.status = 'COMPLETED' and ${aliasBranchScope(ctx, "va")})`;
+const nextApptOf = (ctx: AuthContext) => sql`(select min(na.scheduled_start) from kliniva.appointments na
+  where na.tenant_id = kliniva.patients.tenant_id and na.patient_id = kliniva.patients.id
+    and na.status in ('PENDING_APPROVAL', 'BOOKED', 'CONFIRMED') and na.scheduled_start > now()
+    and ${aliasBranchScope(ctx, "na")})`;
+/** TRY bakiye: aktif hizmet bedelleri − aktif tahsilatlar (kapsam içi). */
+const balanceOf = (ctx: AuthContext) => sql`(
+  coalesce((select sum(pc.total_minor) from kliniva.patient_charges pc
+    where pc.tenant_id = kliniva.patients.tenant_id and pc.patient_id = kliniva.patients.id
+      and pc.status = 'ACTIVE' and pc.currency = 'TRY' and ${aliasBranchScope(ctx, "pc")}), 0)
+  - coalesce((select sum(ct.amount_minor) from kliniva.cash_transactions ct
+    where ct.tenant_id = kliniva.patients.tenant_id and ct.patient_id = kliniva.patients.id
+      and ct.status = 'ACTIVE' and ct.kind = 'INCOME' and ct.currency = 'TRY' and ${aliasBranchScope(ctx, "ct")}), 0))`;
+/** Herhangi bir para biriminde borç (segment için). */
+const hasOpenBalance = (ctx: AuthContext) => sql`exists (
+  select 1 from (
+    select pc.currency, pc.total_minor::bigint as amount from kliniva.patient_charges pc
+     where pc.tenant_id = kliniva.patients.tenant_id and pc.patient_id = kliniva.patients.id
+       and pc.status = 'ACTIVE' and ${aliasBranchScope(ctx, "pc")}
+    union all
+    select ct.currency, -ct.amount_minor::bigint from kliniva.cash_transactions ct
+     where ct.tenant_id = kliniva.patients.tenant_id and ct.patient_id = kliniva.patients.id
+       and ct.status = 'ACTIVE' and ct.kind = 'INCOME' and ${aliasBranchScope(ctx, "ct")}
+  ) l group by l.currency having sum(l.amount) > 0)`;
+
+function segmentCondition(
+  ctx: AuthContext,
+  segment: PatientSegment | undefined,
+  monthStart: Date,
+): SQL | undefined {
+  switch (segment) {
+    case "upcoming":
+      return sql`${nextApptOf(ctx)} is not null`;
+    case "balance":
+      // Finans görme yetkisi olmayan kullanıcı bu segmenti kullanamaz (sessizce boş liste yerine FORBIDDEN).
+      if (!hasPermission(ctx, "billing.read")) throw new AppError("FORBIDDEN");
+      return hasOpenBalance(ctx);
+    case "lapsed":
+      return sql`${lastVisitOf(ctx)} < now() - interval '90 days' and ${nextApptOf(ctx)} is null`;
+    case "returning":
+      return sql`${visitsOf(ctx)} >= 2`;
+    case "no_visit":
+      return sql`${visitsOf(ctx)} = 0`;
+    case "new_month":
+      return sql`${patients.createdAt} >= ${monthStart.toISOString()}::timestamptz`;
+    default:
+      return undefined;
+  }
+}
+
+async function monthStartOf(scope: TenantScope): Promise<Date> {
+  const [p] = await scope.tx
+    .select({ tz: clinicProfiles.timezone })
+    .from(clinicProfiles)
+    .where(tenantWhere(clinicProfiles, scope));
+  const tz = p?.tz ?? DEFAULT_TIMEZONE;
+  const today = dateInZone(new Date(), tz);
+  return zonedDateTimeToUtc(`${today.slice(0, 8)}01`, 0, tz);
+}
+
+/**
+ * Liste üstü özet sayıları (aktif hastalar, kullanıcının kapsamında). Açık bakiye yalnızca billing.read ile.
+ */
+export async function getPatientListSummary(ctx: AuthContext): Promise<{
+  total: number;
+  upcoming: number;
+  newThisMonth: number;
+  lapsed: number;
+  openBalance?: { patients: number; totalMinor: number };
+}> {
+  requirePermission(ctx, "patient.read");
+  const canBilling = hasPermission(ctx, "billing.read");
+  return tenantQuery(ctx, async (scope) => {
+    const monthStart = await monthStartOf(scope);
+    const base = tenantWhere(patients, scope, patientScopeFilter(ctx), eq(patients.active, true));
+    const [r] = await scope.tx
+      .select({
+        total: sql<number>`count(*)::int`,
+        upcoming: sql<number>`count(*) filter (where ${nextApptOf(ctx)} is not null)::int`,
+        newThisMonth: sql<number>`count(*) filter (where ${patients.createdAt} >= ${monthStart.toISOString()}::timestamptz)::int`,
+        lapsed: sql<number>`count(*) filter (where ${lastVisitOf(ctx)} < now() - interval '90 days' and ${nextApptOf(ctx)} is null)::int`,
+        ...(canBilling
+          ? {
+              balancePatients: sql<number>`count(*) filter (where ${balanceOf(ctx)} > 0)::int`,
+              balanceTotal: sql<string>`coalesce(sum(greatest(${balanceOf(ctx)}, 0)), 0)::text`,
+            }
+          : {}),
+      })
+      .from(patients)
+      .where(base);
+    const row = r as {
+      total: number;
+      upcoming: number;
+      newThisMonth: number;
+      lapsed: number;
+      balancePatients?: number;
+      balanceTotal?: string;
+    };
+    return {
+      total: row.total,
+      upcoming: row.upcoming,
+      newThisMonth: row.newThisMonth,
+      lapsed: row.lapsed,
+      ...(canBilling
+        ? { openBalance: { patients: row.balancePatients ?? 0, totalMinor: Number(row.balanceTotal ?? 0) } }
+        : {}),
+    };
+  });
+}
 
 export async function listPatients(
   ctx: AuthContext,
@@ -403,10 +601,19 @@ export async function listPatients(
         : opts.status === "all"
           ? undefined
           : eq(patients.active, true),
+      sourceId ? eq(patients.sourceId, sourceId) : undefined,
+      insurerId ? eq(patients.insurerId, insurerId) : undefined,
+      segmentCondition(ctx, opts.segment, monthStart),
       ...tokenConds,
     );
+  const sourceId = opts.sourceId && uuidSchema.safeParse(opts.sourceId).success ? opts.sourceId : undefined;
+  const insurerId =
+    opts.insurerId && uuidSchema.safeParse(opts.insurerId).success ? opts.insurerId : undefined;
+  const canBilling = hasPermission(ctx, "billing.read");
+  let monthStart = new Date(0);
 
   return tenantQuery(ctx, async (scope) => {
+    if (opts.segment === "new_month") monthStart = await monthStartOf(scope);
     const required = await consentRequired(scope);
     const [counted] = await scope.tx
       .select({ total: sql<number>`count(*)::int` })
@@ -423,6 +630,12 @@ export async function listPatients(
         primaryBranchName: branches.name,
         active: patients.active,
         updatedAt: patients.updatedAt,
+        sourceName: sql<string | null>`(select l.name from kliniva.patient_lookups l
+          where l.tenant_id = kliniva.patients.tenant_id and l.id = kliniva.patients.source_id)`,
+        lastVisitMs: sql<string | null>`(extract(epoch from ${lastVisitOf(ctx)}) * 1000)::bigint::text`,
+        visitCount: sql<number>`${visitsOf(ctx)}::int`,
+        nextApptMs: sql<string | null>`(extract(epoch from ${nextApptOf(ctx)}) * 1000)::bigint::text`,
+        ...(canBilling ? { balance: sql<string>`${balanceOf(ctx)}::text` } : {}),
         ...privacyFlags,
       })
       .from(patients)
@@ -431,24 +644,42 @@ export async function listPatients(
         and(eq(branches.id, patients.primaryBranchId), eq(branches.tenantId, patients.tenantId)),
       )
       .where(where(scope))
-      .orderBy(desc(patients.updatedAt), asc(patients.patientNumber))
+      .orderBy(
+        ...(opts.segment === "balance" && canBilling
+          ? [desc(balanceOf(ctx))]
+          : opts.segment === "upcoming"
+            ? [asc(nextApptOf(ctx))]
+            : opts.segment === "lapsed"
+              ? [asc(lastVisitOf(ctx))]
+              : []),
+        desc(patients.updatedAt),
+        asc(patients.patientNumber),
+      )
       .limit(limit)
       .offset((page - 1) * limit);
     return {
       total: counted?.total ?? 0,
       page,
       limit,
-      items: rows.map(({ phone, disclosureSigned, consentDecided, pending, ...r }) => ({
-        ...r,
-        phoneMasked: maskPhoneNumber(phone),
-        hasPendingDocuments: pending,
-        privacyStatus: computePrivacyStatus({
-          disclosureSigned,
-          consentDecided,
-          pending,
-          consentRequired: required,
-        }),
-      })),
+      items: rows.map(
+        ({ phone, disclosureSigned, consentDecided, pending, lastVisitMs, nextApptMs, ...rest }) => {
+          const { balance, ...r } = rest as typeof rest & { balance?: string };
+          return {
+            ...r,
+            lastVisitAt: lastVisitMs ? new Date(Number(lastVisitMs)) : null,
+            nextAppointmentAt: nextApptMs ? new Date(Number(nextApptMs)) : null,
+            ...(balance !== undefined ? { balanceMinor: Number(balance) } : {}),
+            phoneMasked: maskPhoneNumber(phone),
+            hasPendingDocuments: pending,
+            privacyStatus: computePrivacyStatus({
+              disclosureSigned,
+              consentDecided,
+              pending,
+              consentRequired: required,
+            }),
+          };
+        },
+      ),
     };
   });
 }
@@ -504,14 +735,43 @@ export async function getPatient(ctx: AuthContext, rawId: unknown): Promise<Pati
       emergencyContactName: row.emergencyContactName,
       emergencyContactPhone: row.emergencyContactPhone,
       nationalIdMasked: nationalId ? `*********${nationalId.slice(-2)}` : null,
+      sourceId: row.sourceId,
+      sourceName: null,
+      insurerId: row.insurerId,
+      insurerName: null,
+      socialSecurity: row.socialSecurity as SocialSecurity | null,
+      referral: row.referral,
+      smsAllowed: row.smsAllowed,
       active: row.active,
       privacyStatus: computePrivacyStatus({ ...flags!, consentRequired: required }),
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };
+    const lookupIds = [row.sourceId, row.insurerId].filter((x): x is string => Boolean(x));
+    if (lookupIds.length) {
+      const ls = await scope.tx
+        .select({ id: patientLookups.id, name: patientLookups.name })
+        .from(patientLookups)
+        .where(tenantWhere(patientLookups, scope, inArray(patientLookups.id, lookupIds)));
+      detail.sourceName = ls.find((l) => l.id === row.sourceId)?.name ?? null;
+      detail.insurerName = ls.find((l) => l.id === row.insurerId)?.name ?? null;
+    }
     if (canHealth) {
+      let profile: HealthProfile | null = null;
+      let profileIntegrityError = false;
+      if (row.healthProfileEncrypted) {
+        try {
+          profile = JSON.parse(
+            decryptField(row.healthProfileEncrypted, healthProfileAad(scope.tenantId, row.id)),
+          ) as HealthProfile;
+        } catch {
+          profileIntegrityError = true;
+        }
+      }
       detail.health = {
         notes: row.notesEncrypted ? decryptField(row.notesEncrypted, notesAad(scope.tenantId, row.id)) : null,
+        profile,
+        ...(profileIntegrityError ? { profileIntegrityError } : {}),
       };
     }
     await writeAudit(scope, actorOf(ctx), {
@@ -544,6 +804,8 @@ export async function createPatient(
         .where(tenantWhere(branches, scope, eq(branches.id, data.primaryBranchId)));
       if (!b) throw new AppError("NOT_FOUND");
     }
+    await assertLookup(scope, "SOURCE", data.sourceId);
+    await assertLookup(scope, "INSURER", data.insurerId);
     const duplicates = await findDuplicatesInScope(scope, ctx, data);
     const patientNumber = await nextPatientNumber(scope);
     const id = randomUUID();
@@ -572,6 +834,11 @@ export async function createPatient(
         ? encryptField(data.nationalId, nationalIdAad(scope.tenantId, id))
         : null,
       notesEncrypted: data.notes ? encryptField(data.notes, notesAad(scope.tenantId, id)) : null,
+      sourceId: data.sourceId ?? null,
+      insurerId: data.insurerId ?? null,
+      socialSecurity: data.socialSecurity ?? null,
+      referral: data.referral ?? null,
+      smsAllowed: data.smsAllowed ?? false,
       createdByUserId: ctx.userId,
     });
     if (data.primaryBranchId) await touchPatientBranch(scope, id, data.primaryBranchId);
@@ -607,6 +874,8 @@ export async function updatePatient(ctx: AuthContext, rawId: unknown, input: unk
   await tenantQuery(ctx, async (scope) => {
     const row = await loadVisiblePatient(scope, ctx, rawId);
     if (data.primaryBranchId !== undefined) requireBranchAccess(ctx, data.primaryBranchId);
+    await assertLookup(scope, "SOURCE", data.sourceId, row.sourceId);
+    await assertLookup(scope, "INSURER", data.insurerId, row.insurerId);
 
     const changed = Object.keys(data).filter((k) => (data as Record<string, unknown>)[k] !== undefined);
     const { notes, nationalId, ...rest } = data;
@@ -641,6 +910,117 @@ export async function updatePatient(ctx: AuthContext, rawId: unknown, input: unk
         nationalIdChanged: nationalId !== undefined,
       },
     });
+  });
+}
+
+/**
+ * Sağlık profili (kan grubu, alerjiler, kronik hastalıklar, ilaçlar, sigara, alkol) — tamamı tek şifreli JSON olarak
+ * değiştirilir. Yetki: patient.health.write. Audit'e yalnızca DEĞİŞEN ALAN ADLARI yazılır (değer asla).
+ */
+export async function updatePatientHealthProfile(
+  ctx: AuthContext,
+  rawId: unknown,
+  input: unknown,
+): Promise<void> {
+  requirePermission(ctx, "patient.health.write");
+  const data = parseInput(healthProfileSchema, input);
+  const profile: HealthProfile = {
+    bloodType: data.bloodType ?? null,
+    allergies: data.allergies,
+    chronicConditions: data.chronicConditions,
+    medications: data.medications,
+    smoking: data.smoking ?? null,
+    alcohol: data.alcohol ?? null,
+  };
+  await tenantQuery(ctx, async (scope) => {
+    const row = await loadVisiblePatient(scope, ctx, rawId);
+    let before: Partial<HealthProfile> = {};
+    if (row.healthProfileEncrypted) {
+      try {
+        before = JSON.parse(
+          decryptField(row.healthProfileEncrypted, healthProfileAad(scope.tenantId, row.id)),
+        );
+      } catch {
+        before = {};
+      }
+    }
+    const changed = (Object.keys(profile) as (keyof HealthProfile)[]).filter(
+      (k) => (before[k] || null) !== (profile[k] || null),
+    );
+    if (!changed.length) return;
+    await scope.tx
+      .update(patients)
+      .set({
+        healthProfileEncrypted: encryptField(
+          JSON.stringify(profile),
+          healthProfileAad(scope.tenantId, row.id),
+        ),
+        updatedAt: new Date(),
+      })
+      .where(tenantWhere(patients, scope, eq(patients.id, row.id)));
+    await writeAudit(scope, actorOf(ctx), {
+      action: "PATIENT_HEALTH_PROFILE_UPDATED",
+      entityType: "patient",
+      entityId: row.id,
+      branchId: row.primaryBranchId,
+      metadata: { fields: changed.join(",") },
+    });
+  });
+}
+
+/**
+ * Muayene ekranı için yalnızca uyarı alanları (alerjiler, kronik hastalıklar). patient.health.read; erişim
+ * PATIENT_HEALTH_VIEWED olarak audit'lenir (içerik audit'e yazılmaz). Profil yoksa / çözülemezse boş döner.
+ */
+export async function getPatientHealthAlerts(
+  ctx: AuthContext,
+  rawId: unknown,
+): Promise<{ allergies: string; chronicConditions: string }> {
+  requirePermission(ctx, "patient.health.read");
+  return tenantQuery(ctx, async (scope) => {
+    const row = await loadVisiblePatient(scope, ctx, rawId);
+    let out = { allergies: "", chronicConditions: "" };
+    if (row.healthProfileEncrypted) {
+      try {
+        const prof = JSON.parse(
+          decryptField(row.healthProfileEncrypted, healthProfileAad(scope.tenantId, row.id)),
+        ) as HealthProfile;
+        out = { allergies: prof.allergies ?? "", chronicConditions: prof.chronicConditions ?? "" };
+      } catch {
+        // bütünlük hatası: uyarı gösterilmez; hasta dosyası ayrıca hata gösterir
+      }
+      await writeAudit(scope, actorOf(ctx), {
+        action: "PATIENT_HEALTH_VIEWED",
+        entityType: "patient",
+        entityId: row.id,
+        branchId: row.primaryBranchId,
+        metadata: { scope: "alerts" },
+      });
+    }
+    return out;
+  });
+}
+
+/**
+ * Panel: son 90 günün tamamlanan ziyaretleri, hastanın kaynağına göre (kaynaksız → "Belirtilmedi"). Ziyaret sayısı
+ * kullanıcının şube kapsamında sayılır. Kişisel veri dönmez (yalnızca toplamlar).
+ */
+export async function getPatientSourceStats(
+  ctx: AuthContext,
+): Promise<{ total: number; items: { name: string; count: number }[] }> {
+  requirePermission(ctx, "patient.read", "appointment.read");
+  return tenantQuery(ctx, async (scope) => {
+    const res = await scope.tx.execute<{ name: string | null; n: number }>(sql`
+      select l.name, count(*)::int as n
+        from kliniva.appointments a
+        join kliniva.patients p on p.tenant_id = a.tenant_id and p.id = a.patient_id
+        left join kliniva.patient_lookups l on l.tenant_id = p.tenant_id and l.id = p.source_id
+       where a.tenant_id = ${scope.tenantId}::uuid and a.status = 'COMPLETED'
+         and a.scheduled_start >= now() - interval '90 days' and ${aliasBranchScope(ctx, "a")}
+       group by l.name
+       order by count(*) desc`);
+    const items = res.rows.map((r) => ({ name: r.name ?? "Belirtilmedi", count: r.n }));
+    return { total: items.reduce((t, i) => t + i.count, 0), items };
   });
 }
 

@@ -34,3 +34,9 @@ playwright-report/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Yerel demo test hesapları (sentetik; asla commit edilmez)
+DEMO_GIRISLER.local.md
+
+# Yerel bakım / tanı betikleri (depoya girmez)
+scripts/zz-*

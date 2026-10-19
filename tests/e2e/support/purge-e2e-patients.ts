@@ -48,7 +48,8 @@ async function main() {
     const refs = sql`(
       ${items.length ? sql`id_ref in (${uuidList(items)})` : sql`false`}
       or id_ref in (select id from kliniva.stock_lots where tenant_id = ${t.id} and ${itemCond})
-      or id_ref in (select id from kliniva.appointments where tenant_id = ${t.id} and ${patientCond}))`;
+      or id_ref in (select id from kliniva.appointments where tenant_id = ${t.id} and ${patientCond})
+      or id_ref in (select id from kliniva.patient_tasks where tenant_id = ${t.id} and ${patientCond}))`;
     await tx.execute(
       sql`delete from kliniva.notifications n where n.tenant_id = ${t.id} and exists (select 1 from (select n.entity_id as id_ref) x where ${refs})`,
     );
@@ -95,6 +96,30 @@ async function main() {
       and id not in (select ai_action_log_id from kliniva.pending_ai_actions where tenant_id = ${t.id} and ai_action_log_id is not null)`);
     await tx.execute(
       sql`update kliniva.voice_sessions set status = 'ENDED', ended_at = now() where tenant_id = ${t.id} and status = 'ACTIVE'`,
+    );
+    // Sprint 8: E2E hastalarının hizmet bedelleri ve tahsilatları (finans defteri; yalnızca imha bağlamında silinir)
+    await tx.execute(
+      sql`delete from kliniva.patient_charges where tenant_id = ${t.id} and patient_id in (${list})`,
+    );
+    await tx.execute(
+      sql`delete from kliniva.cash_transactions where tenant_id = ${t.id} and patient_id in (${list})`,
+    );
+    // Sprint 7.3: E2E hastalarının muayene kayıtları (sağlık verisi; yalnızca yasal imha bağlamında silinebilir)
+    await tx.execute(
+      sql`delete from kliniva.patient_tasks where tenant_id = ${t.id} and patient_id in (${list})`,
+    );
+    await tx.execute(
+      sql`delete from kliniva.lab_results where tenant_id = ${t.id} and patient_id in (${list})`,
+    );
+    const att = await tx.execute<{ k: string }>(
+      sql`select storage_key as k from kliniva.clinical_attachments where tenant_id = ${t.id} and patient_id in (${list})`,
+    );
+    for (const r of att.rows) keys.push(r.k);
+    await tx.execute(
+      sql`delete from kliniva.clinical_attachments where tenant_id = ${t.id} and patient_id in (${list})`,
+    );
+    await tx.execute(
+      sql`delete from kliniva.clinical_notes where tenant_id = ${t.id} and patient_id in (${list})`,
     );
     await tx.execute(sql`delete from kliniva.appointment_events where tenant_id = ${t.id} and appointment_id in
       (select id from kliniva.appointments where tenant_id = ${t.id} and patient_id in (${list}))`);

@@ -19,7 +19,7 @@ export const APPOINTMENT_STATUS: Record<AppointmentStatus, { label: string; badg
     card: "border-amber-500 bg-amber-50 dark:bg-amber-950",
   },
   IN_PROGRESS: {
-    label: "İşlemde",
+    label: "Muayenede",
     badge: "badge-sky",
     card: "border-sky-500 bg-sky-50 dark:bg-sky-950",
   },
@@ -59,11 +59,11 @@ export const EVENT_LABELS: Record<string, string> = {
   RESCHEDULED: "Randevu taşındı",
   CONFIRMED: "Onaylandı",
   CHECKED_IN: "Hasta geldi",
-  STARTED: "Muayene / işlem başladı",
+  STARTED: "Muayene başladı",
   COMPLETED: "Tamamlandı",
   CANCELLED: "İptal edildi",
   NO_SHOW: "Gelmedi olarak işaretlendi",
-  NOTES_UPDATED: "Operasyon notu güncellendi",
+  NOTES_UPDATED: "Randevu notu güncellendi",
   APPROVED: "Doktor onayladı",
   DECLINED: "Doktor reddetti",
 };
@@ -84,3 +84,32 @@ export const formatLocalDate = (date: string) =>
   new Intl.DateTimeFormat("tr-TR", { dateStyle: "full", timeZone: "UTC" }).format(
     new Date(`${date}T00:00:00Z`),
   );
+
+/**
+ * Hızlı işlemler (takvim kartı, saati gelen randevu açılır kartı, listeler) — durum + kullanıcının yetkisine göre.
+ * Sunucu her geçişi YENİDEN doğrular (izin, kapsam, durum makinesi, "gelmedi" saati); bu liste yalnızca arayüzdür.
+ *  - start-exam: hasta "geldi" işaretlenmemişse önce GELDİ, sonra BAŞLAT (iki ayrı, ayrı audit'lenen geçiş).
+ */
+export type QuickActionKey = "start-exam" | "checkin" | "start" | "complete" | "no-show";
+export type QuickAction = { key: QuickActionKey; label: string; variant: "primary" | "ghost" | "danger" };
+export type QuickActionPerms = { checkin: boolean; start: boolean; complete: boolean; noShow: boolean };
+
+export function quickActions(
+  status: AppointmentStatus,
+  can: QuickActionPerms,
+  started: boolean,
+): QuickAction[] {
+  const out: QuickAction[] = [];
+  if (status === "BOOKED" || status === "CONFIRMED") {
+    if (can.checkin && can.start)
+      out.push({ key: "start-exam", label: "Muayeneyi başlat", variant: "primary" });
+    if (can.checkin)
+      out.push({ key: "checkin", label: "Hasta geldi", variant: can.start ? "ghost" : "primary" });
+    if (can.noShow && started) out.push({ key: "no-show", label: "Gelmedi", variant: "danger" });
+  } else if (status === "CHECKED_IN" && can.start) {
+    out.push({ key: "start", label: "Muayeneyi başlat", variant: "primary" });
+  } else if (status === "IN_PROGRESS" && can.complete) {
+    out.push({ key: "complete", label: "Muayeneyi tamamla", variant: "primary" });
+  }
+  return out;
+}

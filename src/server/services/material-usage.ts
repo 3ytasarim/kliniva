@@ -160,7 +160,7 @@ async function createUsageInScope(scope: TenantScope, ctx: AuthContext, input: u
     }
     if (a.status !== "IN_PROGRESS" && a.status !== "COMPLETED") {
       throw new AppError("INVALID_STATUS_TRANSITION", {
-        message: "Malzeme kullanımı işlemdeki veya tamamlanmış randevuya girilir.",
+        message: "Malzeme kullanımı muayenesi süren veya tamamlanmış randevuya girilir.",
       });
     }
     branchId = a.branchId;

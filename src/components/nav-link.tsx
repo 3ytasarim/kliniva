@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { Icon, type IconName } from "@/components/ui";
 
 const base =
-  "flex min-h-11 items-center gap-3 whitespace-nowrap rounded-lg px-3 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600";
+  "group relative flex min-h-10 items-center gap-3 whitespace-nowrap rounded-lg px-3 text-sm transition-colors duration-150 focus-visible:outline-none focus-visible:shadow-focus";
 
 export function NavLink({ href, label, icon }: { href: string; label: string; icon: IconName }) {
   const pathname = usePathname();
@@ -16,11 +16,14 @@ export function NavLink({ href, label, icon }: { href: string; label: string; ic
       aria-current={active ? "page" : undefined}
       className={`${base} ${
         active
-          ? "bg-brand-50 font-semibold text-brand-700 dark:bg-brand-900 dark:text-brand-100"
-          : "text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+          ? "app-nav-active bg-brand-50 font-semibold text-brand-800 md:before:absolute md:before:inset-y-2 md:before:-left-3 md:before:w-[3px] md:before:rounded-r-full md:before:bg-brand-600 md:before:content-[''] dark:bg-brand-500/10 dark:text-brand-200"
+          : "font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-slate-100"
       }`}
     >
-      <Icon name={icon} className="size-5 shrink-0 opacity-80" />
+      <Icon
+        name={icon}
+        className={`size-[18px] shrink-0 ${active ? "text-brand-600 dark:text-brand-300" : "text-slate-400 group-hover:text-slate-600 dark:text-slate-500 dark:group-hover:text-slate-300"}`}
+      />
       {label}
     </Link>
   );
@@ -30,9 +33,20 @@ export function NavLink({ href, label, icon }: { href: string; label: string; ic
 export function NavSoon({ label, icon }: { label: string; icon: IconName }) {
   return (
     <span aria-disabled="true" className={`${base} cursor-not-allowed text-slate-400 dark:text-slate-600`}>
-      <Icon name={icon} className="size-5 shrink-0 opacity-60" />
+      <Icon name={icon} className="size-[18px] shrink-0 opacity-60" />
       {label}
-      <span className="badge badge-gray ml-auto">Yakında</span>
+      <span className="ml-auto rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:bg-white/5 dark:text-slate-500">
+        Yakında
+      </span>
     </span>
+  );
+}
+
+/** Menü grubu başlığı (masaüstü). */
+export function NavGroup({ title }: { title: string }) {
+  return (
+    <p className="mt-5 hidden px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400 md:block dark:text-slate-500">
+      {title}
+    </p>
   );
 }

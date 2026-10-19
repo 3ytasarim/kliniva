@@ -889,10 +889,13 @@ describe("Gizlilik", () => {
   it("tüm outbox yükleri ve bildirim metinleri hasta adı / telefon / not içermez", async () => {
     const ev = await runInTenant(A.id, (s) => s.tx.select().from(outboxEvents));
     const ns = await runInTenant(A.id, (s) => s.tx.select().from(notifications));
-    const dump =
+    // UUID'ler hex içerir ("…0539a…" gibi) ve telefon kalıbıyla rastlantısal eşleşebilir → karşılaştırmadan önce
+    // kimlikler maskelenir (kimlik zaten kişisel veri değildir). Eşleşme olursa eşleşen metin hata mesajında görünür.
+    const dump = (
       JSON.stringify(ev.map((e) => e.payloadSafe)) +
-      JSON.stringify(ns.map((n) => [n.title, n.bodySafe, n.metadataSafe]));
-    expect(dump).not.toMatch(/Bildirim\d|Hastası|0539\d|özel sebep/);
+      JSON.stringify(ns.map((n) => [n.title, n.bodySafe, n.metadataSafe]))
+    ).replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<id>");
+    expect(dump.match(/Bildirim\d|Hastası|0539\d|özel sebep/)?.[0] ?? null).toBeNull();
   });
 });
 

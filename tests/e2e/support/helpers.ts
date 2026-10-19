@@ -29,6 +29,21 @@ export function watch(page: Page) {
   return problems;
 }
 
+/**
+ * Saati gelen randevu kartını bu test bağlamında sessize alır (kullanıcıdaki "Bugün sessize al" ile aynı tercih).
+ * Kart engelleyici değildir ama günün saatine göre düğmelerin üstüne gelebilir → testler zamana bağlı olmasın.
+ * Kartın kendisi entegrasyon testinde (reminders) doğrulanır.
+ */
+export async function muteReminders(context: BrowserContext) {
+  await context.addInitScript(() => {
+    try {
+      localStorage.setItem("kliniva:reminders-muted-until", "9999-12-31");
+    } catch {
+      /* depolama kapalı */
+    }
+  });
+}
+
 /** Global setup'ın oturum dosyası (gitignore; çalışma sonunda silinir). */
 export const AUTH_FILE = path.join(".playwright-auth", "owner.json");
 export const AUTH_FILE_RECEPTION = path.join(".playwright-auth", "reception.json");
@@ -41,6 +56,7 @@ export async function loginAs(page: Page, who: "owner" | "reception" | "doctor",
     cookies: Parameters<BrowserContext["addCookies"]>[0];
   };
   await page.context().addCookies(state.cookies);
+  await muteReminders(page.context());
   await page.goto(landing);
 }
 
@@ -50,6 +66,7 @@ export async function login(page: Page) {
     cookies: Parameters<BrowserContext["addCookies"]>[0];
   };
   await page.context().addCookies(state.cookies);
+  await muteReminders(page.context());
   await page.goto("/dashboard");
   await expect(page).toHaveURL(/\/dashboard$/);
 }
